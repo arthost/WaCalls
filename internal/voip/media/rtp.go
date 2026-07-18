@@ -179,6 +179,14 @@ func (s *RtpSession) CreatePacket(payload []byte, marker bool) *RtpPacket {
 	return s.CreatePacketWithDuration(payload, s.samplesPerPacket, marker)
 }
 
+func (s *RtpSession) AdvanceTimestamp(samples uint32) {
+	s.timestamp += samples
+}
+
+func RTPSsrc(data []byte) uint32 {
+	return uint32(data[8])<<24 | uint32(data[9])<<16 | uint32(data[10])<<8 | uint32(data[11])
+}
+
 func (s *RtpSession) CreatePacketWithDuration(payload []byte, durationSamples int, marker bool) *RtpPacket {
 	header := NewRtpHeader(s.payloadType, s.sequenceNumber, s.timestamp, s.ssrc)
 	header.Marker = marker

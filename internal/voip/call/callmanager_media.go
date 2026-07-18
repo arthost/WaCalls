@@ -1,113 +1,175 @@
 package call
 
 import (
+	"errors"
+	"sync"
 	"time"
+
 	"wacalls/internal/voip/core"
+	"wacalls/internal/voip/engine"
 	"wacalls/internal/voip/media"
 	"wacalls/internal/voip/transport"
 )
 
-func (m *CallManager) initCodec() {
-	if m.codec != nil {
-		return
+const rtpSessionBytes = 8 * 1024
+
+func (m *CallManager) replaceRtpSession(s *media.RtpSession) {
+	if m.rtpSession != nil {
+		m.observer.ReleaseMem(rtpSessionBytes)
 	}
-	codec, err := media.NewMLowCodec(media.DefaultCodecOptions)
-	if err != nil {
-		m.log.Warn("MLow codec unavailable — call will run signaling-only (no audio)", "err", err)
-		return
+	m.rtpSession = s
+	if s != nil {
+		m.observer.AddMem(rtpSessionBytes)
 	}
-	m.codec = codec
 }
 
 func (m *CallManager) FeedCapturedPCM(data []float32) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.codec == nil || m.rtpSession == nil || m.srtpSession == nil || !m.relay.HasConnection() {
-		return
-	}
-	m.lastCaptureAt = time.Now()
-	frameSize := m.codec.FrameSize()
-	if m.encodeBuf == nil {
-		m.encodeBuf = make([]float32, frameSize)
-		m.encodeBufPos = 0
-	}
-
-	offset := 0
-	for offset < len(data) {
-		toCopy := min(len(data)-offset, frameSize-m.encodeBufPos)
-		copy(m.encodeBuf[m.encodeBufPos:], data[offset:offset+toCopy])
-		m.encodeBufPos += toCopy
-		offset += toCopy
-		if m.encodeBufPos < frameSize {
-			break
-		}
-		frame := make([]float32, frameSize)
-		copy(frame, m.encodeBuf)
-		m.encodeBufPos = 0
-
-		opus, err := m.codec.Encode(frame)
-		if err != nil {
-			m.log.Debug("encode error", "err", err)
-			continue
-		}
-		m.sendOpusFrameLocked(opus)
+	if a, ok := engine.Capability[core.AudioSink](m.extensions); ok {
+		a.FeedPCM(data)
 	}
 }
 
-func (m *CallManager) sendOpusFrameLocked(opus []byte) {
-	if m.rtpSession == nil || m.srtpSession == nil {
+func (m *CallManager) registerRTPHandler(pt uint8, handler func(*media.RtpPacket)) {
+	m.extMu.Lock()
+	m.rtpHandlers[pt] = handler
+	m.extMu.Unlock()
+}
+
+func (m *CallManager) declareSelfSSRC(ssrc uint32) {
+	m.extMu.Lock()
+	m.declaredSelf[ssrc] = true
+	m.extMu.Unlock()
+}
+
+func (m *CallManager) ensureExtensionsAttachedLocked(ourDeviceJid, peerDeviceJid string) {
+	if m.extAttached {
 		return
 	}
+	m.extAttached = true
+	scope := &engine.CallScope{
+		Log:             m.log,
+		CallID:          m.currentCall.CallID,
+		OwnDeviceJID:    ourDeviceJid,
+		PeerDeviceJID:   peerDeviceJid,
+		Relay:           m.relay,
+		SendAudioFrame:  m.sendAudioFrame,
+		OnRTP:           m.registerRTPHandler,
+		DeclareSelfSSRC: m.declareSelfSSRC,
+		Observer:        m.observer,
+	}
+	for _, e := range m.extensions {
+		if err := e.Attach(scope); err != nil {
+			m.log.Error("extension attach failed", "ext", e.Name(), "err", err)
+		}
+	}
+	if a, ok := engine.Capability[core.AudioSink](m.extensions); ok {
+		a.OnPeerPCM(func(pcm []float32) {
+			if m.OnPeerAudio != nil {
+				m.OnPeerAudio(pcm)
+			}
+		})
+	}
+}
+
+func (m *CallManager) sendAudioFrame(encoded []byte, frameSamples int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.rtpSession == nil || m.srtp == nil {
+		return nil
+	}
 	marker := !m.firstPacketSent
-	pkt := m.rtpSession.CreatePacketWithDuration(opus, m.codec.FrameSize(), marker)
+	if marker {
+		m.observer.Mark(core.MarkMediaFirstPacket)
+	}
+	pkt := m.rtpSession.CreatePacketWithDuration(encoded, frameSamples, marker)
 	if m.debeEnabled {
 		pkt.Header.Extension = true
 		pkt.Header.ExtensionProfile = 0xbede
 		pkt.Header.ExtensionData = nil
 	}
 	m.firstPacketSent = true
-
-	srtp, err := m.srtpSession.Protect(pkt)
+	m.rtpPacketsSent++
+	m.rtpOctetsSent += uint32(len(pkt.Payload))
+	m.lastRtpTs = pkt.Header.Timestamp
+	protected, err := m.srtp.Protect(pkt)
 	if err != nil {
 		m.log.Debug("srtp protect error", "err", err)
-		return
+		return err
 	}
-	m.relay.Broadcast(srtp)
+	m.relay.Broadcast(protected)
+	return nil
 }
 
-func (m *CallManager) startSilenceKeepaliveLocked() {
-	if m.keepaliveStop != nil || m.codec == nil {
+func (m *CallManager) notePeerMedia(ssrc uint32) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ssrc == m.selfSsrc {
 		return
 	}
-	stop := make(chan struct{})
-	m.keepaliveStop = stop
-	frameSize := m.codec.FrameSize()
-	go func() {
-		ticker := time.NewTicker(60 * time.Millisecond)
-		defer ticker.Stop()
-		silence := make([]float32, frameSize)
-		for {
-			select {
-			case <-stop:
-				return
-			case <-ticker.C:
-				m.mu.Lock()
-				ready := m.codec != nil && m.rtpSession != nil && m.srtpSession != nil && m.relay.HasConnection()
-				idle := time.Since(m.lastCaptureAt) > 120*time.Millisecond
-				if ready && idle {
-					if opus, err := m.codec.Encode(silence); err == nil {
-						m.sendOpusFrameLocked(opus)
-					}
-				}
-				m.mu.Unlock()
-			}
+	m.notePeerMediaLocked()
+}
+
+func (m *CallManager) notePeerMediaLocked() {
+	m.lastMediaRecv.Store(time.Now().UnixMilli())
+	if m.currentCall != nil && m.currentCall.StateData.State == core.CallStateReconnecting {
+		if err := m.currentCall.ApplyTransition(Transition{Type: TransitionMediaRestored}); err == nil {
+			m.emitState()
+			m.log.Info("media path restored", "call_id", m.currentCall.CallID)
 		}
-	}()
+	}
 }
 
 func (m *CallManager) onRelayData(data []byte) {
 	if transport.IsStunPacket(data) {
+		return
+	}
+	if transport.IsRtcpPacket(data) {
+		senderSsrc, _ := media.ParseRTCPSenderSSRC(data)
+		m.notePeerMedia(senderSsrc)
+
+		m.mu.Lock()
+		recvSrtcp := m.recvSrtcp
+		recvStats := m.recvStats
+		selfSsrc := m.selfSsrc
+		obs := m.observer
+		callID := ""
+		if m.currentCall != nil {
+			callID = m.currentCall.CallID
+		}
+		m.mu.Unlock()
+		if recvSrtcp == nil || recvStats == nil {
+			return
+		}
+		plain, err := recvSrtcp.Unprotect(data)
+		if err != nil {
+			// SRTCP decode failures are control-plane telemetry drops, kept apart from the
+			// media-plane SrtpRecvDrop counter/tally so an RTCP fault cannot mask or conflate a
+			// genuine audio-decode fault under the same reason label.
+			reason := "other"
+			var se *media.SrtpError
+			if errors.As(err, &se) {
+				reason = string(se.Type)
+			}
+			if m.srtcpDrops.add(reason) {
+				m.log.Warn("srtcp recv packet dropped", "reason", reason, "err", err)
+			}
+			return
+		}
+		now := uint64(time.Now().UnixMilli())
+		in := media.ParseRTCPCompound(plain)
+		if in.HasSR {
+			recvStats.NoteSenderReport(in.SRNtpMid, now)
+		}
+		for _, b := range in.Blocks {
+			if b.SSRC == selfSsrc && b.LSR != 0 {
+				recvStats.NotePeerReportBlock(b.LSR, b.DLSR, b.FractionLost, now)
+			}
+		}
+		q := recvStats.QualitySnapshot(now)
+		obs.NoteQuality(q)
+		if m.OnQuality != nil && callID != "" {
+			m.OnQuality(callID, q)
+		}
 		return
 	}
 	if !transport.IsRtpPacket(data) {
@@ -117,21 +179,15 @@ func (m *CallManager) onRelayData(data []byte) {
 		return
 	}
 	pt := data[1] & 0x7f
-	if pt != core.PayloadTypeWhatsAppOpus {
-		return
-	}
+	ssrc := media.RTPSsrc(data)
 
 	m.mu.Lock()
-	if m.srtpSession == nil || m.codec == nil {
-		m.mu.Unlock()
-		return
-	}
-	ssrc := uint32(data[8])<<24 | uint32(data[9])<<16 | uint32(data[10])<<8 | uint32(data[11])
 	if ssrc == m.selfSsrc {
 		m.mu.Unlock()
 		return
 	}
-	if !m.actualPeerSet {
+	m.notePeerMediaLocked()
+	if pt == core.PayloadTypeWhatsAppOpus && !m.actualPeerSet {
 		m.actualPeerSet = true
 		if !containsSsrc(m.peerSsrcs, ssrc) {
 			m.peerSsrcs = []uint32{ssrc}
@@ -139,24 +195,62 @@ func (m *CallManager) onRelayData(data []byte) {
 			go m.relay.ResendSubscriptions()
 		}
 	}
-	srtp := m.srtpSession
-	codec := m.codec
+	srtp := m.srtp
+	obs := m.observer
+	recvStats := m.recvStats
 	m.mu.Unlock()
+
+	m.extMu.Lock()
+	skip := m.declaredSelf[ssrc]
+	handler := m.rtpHandlers[pt]
+	m.extMu.Unlock()
+	if skip || srtp == nil || handler == nil {
+		return
+	}
 
 	pkt, err := srtp.Unprotect(data)
 	if err != nil {
-		m.log.Debug("srtp unprotect error", "err", err)
+		reason := "other"
+		var se *media.SrtpError
+		if errors.As(err, &se) {
+			reason = string(se.Type)
+		}
+		obs.SrtpRecvDrop(reason)
+		if m.srtpDrops.add(reason) {
+			m.log.Warn("srtp recv packet dropped", "reason", reason, "err", err)
+		} else {
+			m.log.Debug("srtp recv packet dropped", "reason", reason, "err", err)
+		}
 		return
 	}
 	if len(pkt.Payload) == 0 {
 		return
 	}
-	pcm, err := codec.Decode(pkt.Payload)
-	if err != nil {
-		return
+	if recvStats != nil {
+		recvStats.NoteRTP(pkt.Header.SequenceNumber, pkt.Header.Timestamp, uint64(time.Now().UnixMilli()))
 	}
-	pcm = media.NormalizeFrame(pcm, codec.FrameSize())
-	if m.OnPeerAudio != nil {
-		m.OnPeerAudio(pcm)
+	handler(pkt)
+}
+
+type srtpDropTally struct {
+	mu     sync.Mutex
+	counts map[string]int64
+}
+
+func (t *srtpDropTally) add(reason string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.counts == nil {
+		t.counts = map[string]int64{}
 	}
+	t.counts[reason]++
+	return t.counts[reason] == 1
+}
+
+func (t *srtpDropTally) snapshotAndReset() map[string]int64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := t.counts
+	t.counts = nil
+	return out
 }
