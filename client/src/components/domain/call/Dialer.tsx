@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Delete, Phone } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -15,6 +15,15 @@ export const Dialer = ({ sid }: { sid: string }) => {
   const micId = useDevices((s) => s.micId);
   const startCall = useStartCall(sid, micId);
   const t = useT();
+
+  // Inicializar o número a partir do query parameter ?dial=55... se disponível
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const dialNum = params.get("dial");
+    if (dialNum) {
+      setPhone(dialNum.replace(/[^0-9+]/g, "")); // Limpar caracteres que não sejam dígitos ou "+"
+    }
+  }, []);
 
   const submit = () => {
     if (!phone.trim() || startCall.isPending) return;

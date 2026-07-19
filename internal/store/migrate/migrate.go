@@ -6,12 +6,22 @@ import (
 	"fmt"
 )
 
+// migrationsTable uses a service-specific name to avoid collisions with other
+// systems (e.g. Rails) that share the same PostgreSQL database and already
+// own a schema_migrations table with a different column type.
+const migrationsTable = "wacalls_schema_migrations"
+
 func Apply(ctx context.Context, db *sql.DB, migrations [][]string) error {
-	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)`); err != nil {
-		return fmt.Errorf("create schema_migrations: %w", err)
+	createSQL := fmt.Sprintf(
+		`CREATE TABLE IF NOT EXISTS %s (version INTEGER PRIMARY KEY)`,
+		migrationsTable,
+	)
+	if _, err := db.ExecContext(ctx, createSQL); err != nil {
+		return fmt.Errorf("create %s: %w", migrationsTable, err)
 	}
 	var current int
-	if err := db.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&current); err != nil {
+	querySQL := fmt.Sprintf(`SELECT COALESCE(MAX(version), 0) FROM %s`, migrationsTable)
+	if err := db.QueryRowContext(ctx, querySQL).Scan(&current); err != nil {
 		return fmt.Errorf("read schema version: %w", err)
 	}
 	for v := current; v < len(migrations); v++ {
@@ -25,7 +35,8 @@ func Apply(ctx context.Context, db *sql.DB, migrations [][]string) error {
 				return fmt.Errorf("migration %d: %w", v+1, err)
 			}
 		}
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`INSERT INTO schema_migrations (version) VALUES (%d)`, v+1)); err != nil {
+		insertSQL := fmt.Sprintf(`INSERT INTO %s (version) VALUES (%d)`, migrationsTable, v+1)
+		if _, err := tx.ExecContext(ctx, insertSQL); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("migration %d: record version: %w", v+1, err)
 		}

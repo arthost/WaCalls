@@ -15,8 +15,14 @@ const sessionCookie = "wacalls_session"
 const sessionTTL = 7 * 24 * time.Hour
 
 func requestToken(r *http.Request) string {
+	if h := r.Header.Get("X-API-Key"); h != "" {
+		return h
+	}
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 		return strings.TrimPrefix(h, "Bearer ")
+	}
+	if t := r.URL.Query().Get("apiKey"); t != "" {
+		return t
 	}
 	return r.URL.Query().Get("access_token")
 }

@@ -1,40 +1,68 @@
 package app
 
 import (
+	"log/slog"
+	"net"
 	"os"
 	"strings"
 
-	"github.com/pion/ice/v4"
 	"github.com/pion/webrtc/v4"
 )
+
+func detectPublicIP() string {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	if a, ok := conn.LocalAddr().(*net.UDPAddr); ok {
+		return a.IP.String()
+	}
+	return ""
+}
 
 func buildBrowserAPI(udpPort int, externalIPs []string) (*webrtc.API, error) {
 	if udpPort <= 0 {
 		return webrtc.NewAPI(), nil
 	}
 
-	opts := []ice.UDPMuxFromPortOption{ice.UDPMuxFromPortWithNetworks(ice.NetworkTypeUDP4)}
-	if iface := defaultRouteInterface(); iface != "" {
-		opts = append(opts, ice.UDPMuxFromPortWithInterfaceFilter(func(name string) bool {
-			return name == iface
-		}))
-	}
-
-	mux, err := ice.NewMultiUDPMuxFromPort(udpPort, opts...)
-	if err != nil {
-		return nil, err
-	}
-
 	se := webrtc.SettingEngine{}
-	se.SetICEUDPMux(mux)
+	
+	// Adiciona suporte a NAT 1:1 se houver IPs externos configurados
 	if len(externalIPs) > 0 {
-		if err := se.SetICEAddressRewriteRules(webrtc.ICEAddressRewriteRule{
-			External:        externalIPs,
-			AsCandidateType: webrtc.ICECandidateTypeHost,
-		}); err != nil {
-			return nil, err
+		publicIP := externalIPs[0]
+		if publicIP == "auto" {
+			publicIP = detectPublicIP()
+		}
+		if publicIP != "" {
+			se.SetNAT1To1IPs([]string{publicIP}, webrtc.ICECandidateTypeHost)
+			slog.Info("webrtc media engine: NAT 1:1 public IP enabled", "ip", publicIP)
 		}
 	}
+
+	// Força os tipos de rede aceitos pelo Pion
+	se.SetNetworkTypes([]webrtc.NetworkType{
+		webrtc.NetworkTypeUDP4, webrtc.NetworkTypeUDP6,
+		webrtc.NetworkTypeTCP4, webrtc.NetworkTypeTCP6,
+	})
+
+	// Multiplexador UDP em porta fixa única
+	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: udpPort})
+	if err != nil {
+		slog.Error("webrtc media engine: failed to bind UDP mux port, falling back to ephemeral", "port", udpPort, "err", err)
+		return webrtc.NewAPI(), nil
+	}
+	se.SetICEUDPMux(webrtc.NewICEUDPMux(nil, udpConn))
+	slog.Info("webrtc media engine: UDP Mux enabled", "port", udpPort)
+
+	// Multiplexador TCP na mesma porta para fallback (ICE-TCP)
+	if tcpListener, terr := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4zero, Port: udpPort}); terr == nil {
+		se.SetICETCPMux(webrtc.NewICETCPMux(nil, tcpListener, 8))
+		slog.Info("webrtc media engine: ICE-TCP fallback enabled", "port", udpPort)
+	} else {
+		slog.Warn("webrtc media engine: ICE-TCP bind failed (ports already in use or restricted)", "port", udpPort, "err", terr)
+	}
+
 	return webrtc.NewAPI(webrtc.WithSettingEngine(se)), nil
 }
 

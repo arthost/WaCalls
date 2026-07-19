@@ -29,7 +29,7 @@ var migrations = [][]string{
 		name TEXT NOT NULL,
 		jid  TEXT
 	)`},
-	{`CREATE TABLE call_records (
+	{`CREATE TABLE IF NOT EXISTS call_records (
 		call_id    TEXT PRIMARY KEY,
 		session_id TEXT NOT NULL,
 		owner      TEXT,
@@ -39,8 +39,8 @@ var migrations = [][]string{
 		ended_at   INTEGER NOT NULL,
 		end_reason TEXT NOT NULL DEFAULT ''
 	)`,
-		`CREATE INDEX idx_call_records_session_ended ON call_records (session_id, ended_at DESC)`},
-	{`CREATE TABLE contact_photos (
+		`CREATE INDEX IF NOT EXISTS idx_call_records_session_ended ON call_records (session_id, ended_at DESC)`},
+	{`CREATE TABLE IF NOT EXISTS contact_photos (
 		session_id TEXT NOT NULL,
 		jid        TEXT NOT NULL,
 		url        TEXT NOT NULL,
@@ -48,18 +48,18 @@ var migrations = [][]string{
 		fetched_at INTEGER NOT NULL,
 		PRIMARY KEY (session_id, jid)
 	)`},
-	{`CREATE TABLE auth_user (
+	{`CREATE TABLE IF NOT EXISTS auth_user (
 		id            INTEGER PRIMARY KEY CHECK (id = 1),
 		username      TEXT NOT NULL,
 		password_hash TEXT NOT NULL,
 		updated_at    INTEGER NOT NULL
 	)`,
-		`CREATE TABLE auth_session (
+		`CREATE TABLE IF NOT EXISTS auth_session (
 		token_hash TEXT PRIMARY KEY,
 		expires_at INTEGER NOT NULL,
 		created_at INTEGER NOT NULL
 	)`,
-		`CREATE INDEX idx_auth_session_expires ON auth_session (expires_at)`},
+		`CREATE INDEX IF NOT EXISTS idx_auth_session_expires ON auth_session (expires_at)`},
 }
 
 func Open(ctx context.Context, path string) (*Bundle, error) {

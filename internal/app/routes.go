@@ -20,6 +20,8 @@ var apiRoutes = []struct {
 	{"DELETE", "/sessions/{sid}", (*Server).handleSessionDelete},
 	{"POST", "/sessions/{sid}/logout", (*Server).handleSessionLogout},
 	{"POST", "/sessions/{sid}/pair", (*Server).handleSessionPair},
+	{"GET", "/sessions/{sid}/qr", (*Server).handleSessionQR},
+	{"GET", "/sessions/{sid}/status", (*Server).handleSessionStatus},
 	{"POST", "/sessions/{sid}/calls", (*Server).handleStartCall},
 	{"GET", "/sessions/{sid}/calls", (*Server).handleCallList},
 	{"GET", "/sessions/{sid}/calls/{id}", (*Server).handleCallGet},

@@ -123,7 +123,7 @@ func (m *Manager) Infos() []events.SessionInfo {
 	m.mu.RUnlock()
 	out := make([]events.SessionInfo, 0, len(ordered))
 	for _, s := range ordered {
-		out = append(out, s.info())
+		out = append(out, s.Info())
 	}
 	return out
 }
@@ -165,8 +165,11 @@ func (m *Manager) Restore(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) Create(name string) (string, error) {
-	id := newSessionID()
+// Create creates a new WhatsApp session. If id is empty a random ID is generated.
+func (m *Manager) Create(name, id string) (string, error) {
+	if id == "" {
+		id = newSessionID()
+	}
 	if err := m.store.Insert(m.appCtx, id, name); err != nil {
 		return "", err
 	}

@@ -198,7 +198,7 @@ func (s *Session) setAuth(a events.AuthSnapshot) {
 	s.mgr.broker.EmitSessionList(s.mgr.Infos())
 }
 
-func (s *Session) info() events.SessionInfo {
+func (s *Session) Info() events.SessionInfo {
 	s.mu.Lock()
 	a := s.auth
 	s.mu.Unlock()
@@ -206,7 +206,7 @@ func (s *Session) info() events.SessionInfo {
 	if id := s.client.Store.ID; id != nil {
 		jid = id.String()
 	}
-	return events.SessionInfo{ID: s.id, Name: s.name, JID: jid, State: a.State, Paired: a.Paired || jid != ""}
+	return events.SessionInfo{ID: s.id, Name: s.name, JID: jid, State: a.State, Paired: a.Paired || jid != "", QR: a.QR}
 }
 
 func (s *Session) getBridge(callID string) *Bridge {

@@ -12,6 +12,7 @@ func (s *Server) handleSessionList(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
+		ID   string `json:"id"`
 		Name string `json:"name"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
@@ -19,7 +20,8 @@ func (s *Server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = "Session"
 	}
-	id, err := s.sessions.Create(name)
+	customID := strings.TrimSpace(body.ID)
+	id, err := s.sessions.Create(name, customID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -49,4 +51,21 @@ func (s *Server) handleSessionPair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleSessionQR(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionByID(w, r.PathValue("sid"))
+	if sess == nil {
+		return
+	}
+	info := sess.Info()
+	writeJSON(w, http.StatusOK, map[string]string{"qr": info.QR})
+}
+
+func (s *Server) handleSessionStatus(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionByID(w, r.PathValue("sid"))
+	if sess == nil {
+		return
+	}
+	writeJSON(w, http.StatusOK, sess.Info())
 }

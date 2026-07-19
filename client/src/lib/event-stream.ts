@@ -97,8 +97,9 @@ class EventStream {
 
   #open(): void {
     if (this.#es) return;
+    const base = window.location.pathname.includes("/api/v1/calls") ? "/api/v1/calls" : "";
     const es = new EventSource(
-      `/api/events?clientId=${encodeURIComponent(this.#clientId)}`,
+      `${base}/api/events?clientId=${encodeURIComponent(this.#clientId)}`,
     );
     this.#es = es;
     this.#lastActivity = Date.now();
@@ -118,17 +119,12 @@ class EventStream {
       for (const l of this.#listeners) {
         try {
           l(parsed);
-        } catch (err) {
-          console.error("event listener failed", err);
-        }
+        } catch {}
       }
     };
     es.onerror = () => {
       this.#emitStatus(false);
-      // EventSource retries network failures on its own but gives up for good
-      // on an HTTP error response (e.g. a 502 from a reverse proxy while the
-      // backend restarts), so reconnection has to be handled here.
-      if (es.readyState === EventSource.CLOSED) this.#scheduleReconnect();
+      this.#scheduleReconnect();
     };
     this.#startWatchdog();
   }
