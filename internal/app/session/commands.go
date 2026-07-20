@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"wacalls/internal/voip/call"
 	"wacalls/internal/voip/core"
@@ -28,6 +29,24 @@ func (s *Session) StartCall(ctx context.Context, phone string) (StartedCall, err
 	if max := s.mgr.maxCalls; max > 0 && s.calls.Count() >= max {
 		return StartedCall{}, ErrTooManyCalls
 	}
+
+	// Garante que o WebSocket do WhatsApp está ativo antes de iniciar a chamada.
+	// O whatsmeow pode estar em reconexão silenciosa mesmo com state="open".
+	if !s.client.IsConnected() {
+		s.log.Warn("WhatsApp WebSocket not connected before call — attempting reconnect", "session", s.id)
+		if err := s.client.Connect(); err != nil {
+			return StartedCall{}, fmt.Errorf("websocket reconnect failed: %w", err)
+		}
+		// Aguarda o cliente estabelecer a conexão (máx 5 s)
+		deadline := time.Now().Add(5 * time.Second)
+		for !s.client.IsConnected() && time.Now().Before(deadline) {
+			time.Sleep(200 * time.Millisecond)
+		}
+		if !s.client.IsConnected() {
+			return StartedCall{}, fmt.Errorf("websocket not connected after reconnect attempt")
+		}
+	}
+
 	peer := types.NewJID(phone, types.DefaultUserServer)
 	callID, err := s.calls.StartCall(ctx, peer)
 	if err != nil {

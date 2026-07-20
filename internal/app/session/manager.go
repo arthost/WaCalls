@@ -139,7 +139,14 @@ func (m *Manager) Restore(ctx context.Context) error {
 	}
 	for _, row := range rows {
 		if row.JID == "" {
-			_ = m.store.Delete(ctx, row.ID)
+			// Sessão criada mas nunca pareada (JID vazio) — restaura em modo pairing
+			// para que o usuário possa escanear o QR sem perder o ID da sessão.
+			device := m.container.NewDevice()
+			client := whatsmeow.NewClient(device, m.waLogger)
+			s := m.NewSession(row.ID, row.Name, client)
+			if err := s.startPairing(ctx); err != nil {
+				m.log.Error("session start pairing failed on restore", "session", row.ID, "err", err)
+			}
 			continue
 		}
 		jid, err := types.ParseJID(row.JID)

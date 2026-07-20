@@ -137,6 +137,10 @@ func (s *Session) handleEvent(rawEvt any) {
 			_ = s.mgr.store.SetJID(s.mgr.appCtx, s.id, id.String())
 		}
 		s.setAuth(events.AuthSnapshot{State: "open", Paired: true})
+	case *waevents.Disconnected:
+		// O whatsmeow tentará reconectar automaticamente. Apenas logamos.
+		s.log.Warn("WhatsApp WebSocket disconnected — auto-reconnect pending", "session", s.id)
+		s.setAuth(events.AuthSnapshot{State: "connecting", Paired: true})
 	case *waevents.LoggedOut:
 		s.setAuth(events.AuthSnapshot{State: "logged_out", Paired: false})
 	case *waevents.CallOffer:
