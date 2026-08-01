@@ -28,8 +28,10 @@ WORKDIR /app
 # Dependências de build para CGO (opus-dev)
 RUN apk add --no-cache gcc musl-dev pkgconf opus-dev
 
+# Configura proxy do Go com fallback para evitar TLS handshake timeout em conexões de rede
+ENV GOPROXY=https://goproxy.io,https://proxy.golang.org,direct
 COPY go.mod go.sum ./
-RUN go mod download
+RUN go mod download || go mod download
 
 # Copiamos o código fonte do Go
 COPY . .

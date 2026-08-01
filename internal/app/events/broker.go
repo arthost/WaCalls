@@ -132,6 +132,45 @@ func (b *Broker) EmitIncomingClaimed(sessionID, id, owner string) {
 	b.broadcast(map[string]any{"type": "incoming-claimed", "sessionId": sessionID, "id": id, "owner": owner})
 }
 
+// EmitGroupCall broadcasts a group call initiation or invitation event
+func (b *Broker) EmitGroupCall(sessionID, callID string, phones []string, isVideo bool, groupJID string) {
+	b.broadcast(map[string]any{
+		"type": "group-call", "sessionId": sessionID, "id": callID,
+		"phones": phones, "isVideo": isVideo, "groupJid": groupJID,
+		"offeredAt": time.Now().UnixMilli(),
+	})
+}
+
+// EmitCallControl broadcasts transient call control signals (screen share, hand raise, emoji reaction)
+func (b *Broker) EmitCallControl(sessionID, callID, action, participant, emoji string, extra map[string]any) {
+	ev := map[string]any{
+		"type": "call-control", "sessionId": sessionID, "id": callID,
+		"action": action, "participant": participant, "emoji": emoji,
+	}
+	for k, v := range extra {
+		ev[k] = v
+	}
+	b.broadcast(ev)
+}
+
+// EmitCallLobby broadcasts lobby status changes (participant waiting, admitted, rejected)
+func (b *Broker) EmitCallLobby(sessionID, callID, participant, action string) {
+	b.broadcast(map[string]any{
+		"type": "call-lobby", "sessionId": sessionID, "id": callID,
+		"participant": participant, "action": action,
+		"timestamp": time.Now().UnixMilli(),
+	})
+}
+
+// EmitCallParticipants broadcasts participant list changes (added, removed, rering)
+func (b *Broker) EmitCallParticipants(sessionID, callID, participant, action string, phones []string) {
+	b.broadcast(map[string]any{
+		"type": "call-participants", "sessionId": sessionID, "id": callID,
+		"participant": participant, "action": action, "phones": phones,
+		"timestamp": time.Now().UnixMilli(),
+	})
+}
+
 // EmitCallQuality broadcasts a live per-call reception-quality sample (RTT, jitter, loss) derived
 // from inbound RTCP. It is a transient live-only signal: it never touches CallRecord, persistence,
 // or webhooks, so the client's call card can render it without polluting the history contract.

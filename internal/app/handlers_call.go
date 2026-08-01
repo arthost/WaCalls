@@ -166,6 +166,152 @@ func (s *Server) doEndCall(sess *session.Session, w http.ResponseWriter, r *http
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) handleStartGroupCall(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionByID(w, r.PathValue("sid"))
+	if sess == nil {
+		return
+	}
+	var body struct {
+		Phones   []string `json:"phones"`
+		IsVideo  bool     `json:"is_video"`
+		GroupJID string   `json:"group_jid"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Phones) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "at least one phone is required"})
+		return
+	}
+	var cleanPhones []string
+	for _, p := range body.Phones {
+		if cp := normalizePhone(p); cp != "" {
+			cleanPhones = append(cleanPhones, cp)
+		}
+	}
+	if len(cleanPhones) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no valid phone numbers"})
+		return
+	}
+
+	st, err := sess.StartCall(r.Context(), cleanPhones[0])
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	owner := clientID(r)
+	s.broker.UpsertCall(events.CallRecord{
+		SessionID: sess.ID(), CallID: st.CallID, Owner: events.OwnerRef(owner), Direction: "outbound",
+		Peer: strings.Join(cleanPhones, ","), PeerName: body.GroupJID,
+		StartedAt: time.Now().UnixMilli(), Status: events.StatusRinging,
+	})
+
+	s.broker.EmitGroupCall(sess.ID(), st.CallID, cleanPhones, body.IsVideo, body.GroupJID)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"call": map[string]any{
+			"callId":   st.CallID,
+			"phones":   cleanPhones,
+			"isVideo":  body.IsVideo,
+			"groupJid": body.GroupJID,
+		},
+	})
+}
+
+func (s *Server) handleCallControl(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionByID(w, r.PathValue("sid"))
+	if sess == nil {
+		return
+	}
+	callID := r.PathValue("id")
+	var body struct {
+		Action      string         `json:"action"`
+		Participant string         `json:"participant"`
+		Emoji       string         `json:"emoji"`
+		Extra       map[string]any `json:"extra"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Action == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "action is required"})
+		return
+	}
+	s.broker.EmitCallControl(sess.ID(), callID, body.Action, body.Participant, body.Emoji, body.Extra)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleCallLobby(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionByID(w, r.PathValue("sid"))
+	if sess == nil {
+		return
+	}
+	callID := r.PathValue("id")
+	var body struct {
+		Participant string `json:"participant"`
+		Action      string `json:"action"` // "admit" | "reject"
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Participant == "" || body.Action == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "participant and action required"})
+		return
+	}
+	s.broker.EmitCallLobby(sess.ID(), callID, body.Participant, body.Action)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleCallParticipants(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionByID(w, r.PathValue("sid"))
+	if sess == nil {
+		return
+	}
+	callID := r.PathValue("id")
+	var body struct {
+		Phone       string   `json:"phone"`
+		Action      string   `json:"action"` // "add" | "remove" | "rering"
+		PhonesList  []string `json:"phones"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Action == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "action required"})
+		return
+	}
+	cleanPhone := normalizePhone(body.Phone)
+	s.broker.EmitCallParticipants(sess.ID(), callID, cleanPhone, body.Action, body.PhonesList)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleCreateCallLink(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionByID(w, r.PathValue("sid"))
+	if sess == nil {
+		return
+	}
+	var body struct {
+		Title       string `json:"title"`
+		ScheduledAt int64  `json:"scheduled_at"`
+		IsVideo     bool   `json:"is_video"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if body.Title == "" {
+		body.Title = "Reunião DUO CRM"
+	}
+	token := time.Now().Format("20060102150405") + "-" + sess.ID()[:6]
+	linkURL := "/call-room/" + token
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"token":        token,
+		"url":          linkURL,
+		"title":        body.Title,
+		"scheduled_at": body.ScheduledAt,
+		"is_video":     body.IsVideo,
+	})
+}
+
+func (s *Server) handleGetCallLink(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionByID(w, r.PathValue("sid"))
+	if sess == nil {
+		return
+	}
+	token := r.PathValue("token")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"token": token,
+		"valid": true,
+		"title": "Reunião DUO CRM",
+	})
+}
+
 func normalizePhone(p string) string {
 	p = strings.TrimSpace(p)
 	p = strings.TrimPrefix(p, "+")

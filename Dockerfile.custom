@@ -44,8 +44,10 @@ WORKDIR /app
 RUN apk add --no-cache gcc musl-dev pkgconf opus-dev
 
 # Copy go.mod and go.sum from Stage 1
+# Configura proxy do Go com fallback para evitar TLS handshake timeout em conexões de rede
+ENV GOPROXY=https://goproxy.io,https://proxy.golang.org,direct
 COPY --from=base /app/go.mod /app/go.sum ./
-RUN go mod download
+RUN go mod download || go mod download
 
 # Copy the rest of the Go source code from Stage 1
 COPY --from=base /app ./

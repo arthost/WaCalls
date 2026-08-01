@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"wacalls/internal/voip/call"
@@ -30,25 +31,41 @@ func (s *Session) StartCall(ctx context.Context, phone string) (StartedCall, err
 		return StartedCall{}, ErrTooManyCalls
 	}
 
-	// Garante que o WebSocket do WhatsApp está ativo antes de iniciar a chamada.
-	// O whatsmeow pode estar em reconexão silenciosa mesmo com state="open".
-	if !s.client.IsConnected() {
-		s.log.Warn("WhatsApp WebSocket not connected before call — attempting reconnect", "session", s.id)
-		if err := s.client.Connect(); err != nil {
-			return StartedCall{}, fmt.Errorf("websocket reconnect failed: %w", err)
-		}
-		// Aguarda o cliente estabelecer a conexão (máx 5 s)
-		deadline := time.Now().Add(5 * time.Second)
-		for !s.client.IsConnected() && time.Now().Before(deadline) {
-			time.Sleep(200 * time.Millisecond)
-		}
+	ensureConnected := func() error {
 		if !s.client.IsConnected() {
-			return StartedCall{}, fmt.Errorf("websocket not connected after reconnect attempt")
+			s.log.Warn("WhatsApp WebSocket disconnected — attempting reconnect", "session", s.id)
+			s.client.Disconnect()
+			if err := s.client.Connect(); err != nil {
+				return fmt.Errorf("websocket reconnect failed: %w", err)
+			}
+			deadline := time.Now().Add(6 * time.Second)
+			for !s.client.IsConnected() && time.Now().Before(deadline) {
+				time.Sleep(200 * time.Millisecond)
+			}
+			if !s.client.IsConnected() {
+				return fmt.Errorf("websocket not connected after reconnect attempt")
+			}
 		}
+		return nil
+	}
+
+	if err := ensureConnected(); err != nil {
+		return StartedCall{}, err
 	}
 
 	peer := types.NewJID(phone, types.DefaultUserServer)
 	callID, err := s.calls.StartCall(ctx, peer)
+	if err != nil && strings.Contains(err.Error(), "websocket not connected") {
+		s.log.Warn("Call offer failed with websocket disconnected — forcing reconnect & retry", "session", s.id)
+		s.client.Disconnect()
+		_ = s.client.Connect()
+		deadline := time.Now().Add(6 * time.Second)
+		for !s.client.IsConnected() && time.Now().Before(deadline) {
+			time.Sleep(200 * time.Millisecond)
+		}
+		callID, err = s.calls.StartCall(ctx, peer)
+	}
+
 	if err != nil {
 		return StartedCall{}, err
 	}
