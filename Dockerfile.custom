@@ -1,0 +1,75 @@
+# syntax=docker/dockerfile:1
+# =============================================================================
+# DuoCRM Calls — Custom Image (Production Git Build)
+# Builds directly from GitHub repository using GITHUB_TOKEN
+# =============================================================================
+
+# ==========================
+# Stage 1: Clone + Source
+# ==========================
+FROM alpine:3.21 AS base
+RUN apk update && apk add --no-cache git
+WORKDIR /app
+
+ARG GITHUB_TOKEN=""
+ARG GIT_BRANCH="feature/wacalls-app"
+
+RUN if [ -n "${GITHUB_TOKEN}" ]; then \
+      git clone https://${GITHUB_TOKEN}@github.com/arthost/WaCalls.git . --branch ${GIT_BRANCH} --depth 1; \
+    else \
+      git clone https://github.com/arthost/WaCalls.git . --branch ${GIT_BRANCH} --depth 1; \
+    fi
+
+# ==========================
+# Stage 2: Build do React (client)
+# ==========================
+FROM node:22-alpine AS client-builder
+WORKDIR /client
+
+# Copy package files from Stage 1 clone
+COPY --from=base /app/client/package.json /app/client/package-lock.json ./
+RUN npm ci --prefer-offline
+
+# Copy the rest of the client source code and build
+COPY --from=base /app/client ./
+RUN npm run build
+
+# ==========================
+# Stage 3: Build do Go (servidor)
+# ==========================
+FROM golang:alpine AS go-builder
+WORKDIR /app
+
+# Dependências de build para CGO (opus-dev)
+RUN apk add --no-cache gcc musl-dev pkgconf opus-dev
+
+# Copy go.mod and go.sum from Stage 1
+# Configura proxy do Go com fallback para evitar TLS handshake timeout em conexões de rede
+ENV GOPROXY=https://goproxy.io,https://proxy.golang.org,direct
+COPY --from=base /app/go.mod /app/go.sum ./
+RUN go mod download || go mod download
+
+# Copy the rest of the Go source code from Stage 1
+COPY --from=base /app ./
+
+# Copy compiled react static files from client-builder
+COPY --from=client-builder /client/dist /app/internal/app/webui/dist
+
+# Build the Go binary
+RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o /wacalls ./cmd/server
+
+# ==========================
+# Stage 4: Runtime mínimo
+# ==========================
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates opus wget
+
+COPY --from=go-builder /wacalls /usr/local/bin/wacalls
+
+WORKDIR /app
+EXPOSE 8090
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=25s --retries=5 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:8090/healthz || exit 1
+
+CMD ["/usr/local/bin/wacalls", "--addr", ":8090", "--db", "/data/wacalls.db"]
