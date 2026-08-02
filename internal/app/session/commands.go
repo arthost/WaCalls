@@ -112,7 +112,7 @@ func (s *Session) EnableVideo(ctx context.Context, callID string) error {
 }
 
 func (s *Session) HoldCall(ctx context.Context, callID string) error {
-	diskPath := filepath.Join(s.mgr.cfg.DataDir, "hold-music.wav")
+	diskPath := filepath.Join(s.mgr.DataDir, "hold-music.wav")
 	music := assets.LoadHoldMusic(diskPath)
 	err := s.calls.HoldCall(ctx, callID, music)
 	if err == nil {

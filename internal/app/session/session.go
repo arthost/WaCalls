@@ -283,7 +283,7 @@ func (s *Session) StartRecording(callID string) error {
 	if s.recorders[callID] != nil {
 		return nil
 	}
-	dir := s.mgr.cfg.RecordingsDir
+	dir := s.mgr.RecordingsDir
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
