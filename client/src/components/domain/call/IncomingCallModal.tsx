@@ -67,7 +67,6 @@ const startRingLoop = (): RingHandle | null => {
 export const IncomingCallModal = () => {
   const incoming = useCalls((s) => s.incoming);
   const pendingTransfer = useCalls((s) => s.pendingTransfer);
-  const calls = useCalls((s) => s.calls);
   const micId = useDevices((s) => s.micId);
   const accept = useAcceptCall(micId);
   const reject = useRejectCall();

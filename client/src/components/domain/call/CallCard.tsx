@@ -367,7 +367,7 @@ export const CallCard = ({ call }: { call: CallSummary }) => {
                     : t.calls.status[call.status]}
                 </StatusBadge>
                 {isHeld && <StatusBadge tone="warn">{t.calls.onHold}</StatusBadge>}
-                {isRecording && <StatusBadge tone="bad">🔴 {t.calls.recording}</StatusBadge>}
+                {isRecording && <StatusBadge tone="danger">🔴 {t.calls.recording}</StatusBadge>}
               </div>
             </div>
           </div>
