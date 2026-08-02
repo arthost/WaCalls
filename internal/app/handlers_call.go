@@ -143,7 +143,7 @@ func (s *Server) handleRecord(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHoldMusicGet(w http.ResponseWriter, r *http.Request) {
-	diskPath := filepath.Join(s.cfg.DataDir, "hold-music.wav")
+	diskPath := filepath.Join(s.dataDir, "hold-music.wav")
 	st, err := os.Stat(diskPath)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -174,12 +174,12 @@ func (s *Server) handleHoldMusicUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := os.MkdirAll(s.cfg.DataDir, 0755); err != nil {
+	if err := os.MkdirAll(s.dataDir, 0755); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
-	destPath := filepath.Join(s.cfg.DataDir, "hold-music.wav")
+	destPath := filepath.Join(s.dataDir, "hold-music.wav")
 	tempPath := destPath + ".tmp"
 
 	if err := os.WriteFile(tempPath, data, 0644); err != nil {

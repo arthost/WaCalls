@@ -42,6 +42,7 @@ type Server struct {
 	sessions       *session.Manager
 	log            *slog.Logger
 	staticDir      string
+	dataDir        string
 	version        string
 	debug          bool
 	authorize      func(*http.Request) bool
@@ -130,6 +131,7 @@ func NewServer(ctx context.Context, cfg config.Config, obsFactory func(string) c
 		sessions:       mgr,
 		log:            log,
 		staticDir:      cfg.StaticDir,
+		dataDir:        cfg.DataDir,
 		version:        cmp.Or(cfg.Version, "dev"),
 		debug:          cfg.Debug,
 		allowedOrigins: parseOrigins(cfg.CORSOrigins),
