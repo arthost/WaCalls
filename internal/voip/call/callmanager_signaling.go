@@ -39,6 +39,10 @@ func (m *CallManager) HandleCallOffer(ctx context.Context, node *waBinary.Node, 
 	m.log.Debug("offer inner node structure", "call_id", callID, "children", childTagSummary(info.InnerNode))
 
 	mediaType := core.CallMediaTypeAudio
+	video := signaling.OfferHasVideo(info.InnerNode)
+	if video {
+		mediaType = core.CallMediaTypeVideo
+	}
 
 	m.mu.Lock()
 	call := NewIncomingCall(callID, peerJid.String(), creator, "", mediaType)
@@ -68,9 +72,12 @@ func (m *CallManager) HandleCallOffer(ctx context.Context, node *waBinary.Node, 
 	m.selfSsrc = media.GenerateSecureSsrc(callID, sj, 0)
 	m.replaceRtpSession(media.NewWhatsAppOpusSession(m.selfSsrc))
 	m.peerSsrcs = []uint32{media.GenerateSecureSsrc(callID, peerJid.String(), 0)}
+	if video {
+		m.deriveVideoSsrcsLocked(callID, sj, peerJid.String())
+	}
 	m.mu.Unlock()
 
-	preaccept := signaling.BuildPreacceptStanza(peerJid, callID, wanode.MustJID(creator))
+	preaccept := signaling.BuildPreacceptStanza(peerJid, callID, wanode.MustJID(creator), video)
 	if err := m.sock.SendNode(ctx, preaccept); err != nil {
 		m.log.Error("send preaccept", "err", err)
 	}
@@ -124,8 +131,13 @@ func (m *CallManager) HandleCallAccept(ctx context.Context, node *waBinary.Node,
 	if m.peerSsrcs == nil || !m.actualPeerSet {
 		peerDeviceJid := ensureDeviceJid(peerJid.String())
 		m.peerSsrcs = []uint32{media.GenerateSecureSsrc(call.CallID, peerDeviceJid, 0)}
+		m.rememberDeviceJidsLocked("", peerDeviceJid)
+		if call.MediaType == core.CallMediaTypeVideo && m.videoPeerSsrc == 0 {
+			m.videoPeerSsrc = media.GenerateSecureSsrc(call.CallID, peerDeviceJid, 2)
+		}
 	}
 	m.relay.SetSubscriptionSsrc(firstSsrc(m.peerSsrcs))
+	m.applyStreamSsrcsLocked()
 	m.initSrtpKeysLocked()
 	hasConn := m.relay.HasConnection()
 	relayData := call.RelayData
@@ -326,9 +338,16 @@ func (m *CallManager) HandleCallAck(ctx context.Context, node *waBinary.Node) {
 			m.selfSsrc = newSelf
 			m.replaceRtpSession(media.NewWhatsAppOpusSession(newSelf))
 		}
+		peerDeviceJid := ""
 		if peer := firstPeerDevice(parsed.ParticipantJids, ourBase); peer != "" {
-			m.peerSsrcs = []uint32{media.GenerateSecureSsrc(call.CallID, ensureDeviceJid(peer), 0)}
+			peerDeviceJid = ensureDeviceJid(peer)
+			m.peerSsrcs = []uint32{media.GenerateSecureSsrc(call.CallID, peerDeviceJid, 0)}
 		}
+		m.rememberDeviceJidsLocked(ourDeviceJid, peerDeviceJid)
+		if call.MediaType == core.CallMediaTypeVideo {
+			m.deriveVideoSsrcsLocked(call.CallID, ourDeviceJid, peerDeviceJid)
+		}
+		m.applyStreamSsrcsLocked()
 		if call.EncryptionKey != nil {
 			m.initSrtpKeysLocked()
 		}
@@ -337,6 +356,7 @@ func (m *CallManager) HandleCallAck(ctx context.Context, node *waBinary.Node) {
 	peer := wanode.MustJID(call.PeerJid)
 	callID := call.CallID
 	creator := wanode.MustJID(call.CallCreator)
+	video := call.MediaType == core.CallMediaTypeVideo
 	sendPreaccept := isInitiator && !m.outgoingPreacceptSent
 	if sendPreaccept {
 		m.outgoingPreacceptSent = true
@@ -345,7 +365,7 @@ func (m *CallManager) HandleCallAck(ctx context.Context, node *waBinary.Node) {
 	m.mu.Unlock()
 
 	if sendPreaccept {
-		_ = m.sock.SendNode(ctx, signaling.BuildPreacceptStanza(peer, callID, creator))
+		_ = m.sock.SendNode(ctx, signaling.BuildPreacceptStanza(peer, callID, creator, video))
 	}
 	m.connectRelays(endpoints)
 }

@@ -120,10 +120,10 @@ func (b *Broker) EmitSessionQR(sessionID, qr string) {
 	b.broadcast(map[string]any{"type": "session-qr", "sessionId": sessionID, "qr": qr})
 }
 
-func (b *Broker) EmitIncoming(sessionID, id, peer, peerName, peerPhotoURL string) {
+func (b *Broker) EmitIncoming(sessionID, id, peer, peerName, peerPhotoURL string, isVideo bool) {
 	b.broadcast(map[string]any{
 		"type": "incoming", "sessionId": sessionID, "id": id, "peer": peer,
-		"peerName": peerName, "peerPhotoUrl": peerPhotoURL,
+		"peerName": peerName, "peerPhotoUrl": peerPhotoURL, "isVideo": isVideo,
 		"offeredAt": time.Now().UnixMilli(),
 	})
 }
@@ -188,6 +188,38 @@ func (b *Broker) EmitCallMark(sessionID, callID, mark string, elapsedMs int64) {
 	b.broadcast(map[string]any{
 		"type": "call-mark", "sessionId": sessionID, "id": callID,
 		"mark": mark, "elapsedMs": elapsedMs,
+	})
+}
+
+// EmitVideoState broadcasts a mid-call video negotiation state change (the peer
+// enabled/disabled their camera, or accepted/rejected our upgrade request). The
+// numeric state is a signaling.VideoState* constant. Transient live-only signal;
+// never persisted — feeds the client's camera/video toggle UI.
+func (b *Broker) EmitVideoState(sessionID, callID string, state int) {
+	b.broadcast(map[string]any{
+		"type": "call-video-state", "sessionId": sessionID, "id": callID,
+		"state": state,
+	})
+}
+
+func (b *Broker) EmitHoldState(sessionID, callID string, onHold bool) {
+	b.broadcast(map[string]any{
+		"type": "call-hold-state", "sessionId": sessionID, "id": callID,
+		"onHold": onHold,
+	})
+}
+
+func (b *Broker) EmitRecordState(sessionID, callID string, recording bool) {
+	b.broadcast(map[string]any{
+		"type": "call-record-state", "sessionId": sessionID, "id": callID,
+		"recording": recording,
+	})
+}
+
+func (b *Broker) EmitTransfer(sessionID, callID, toOwner, fromOwner string) {
+	b.broadcast(map[string]any{
+		"type": "call-transfer", "sessionId": sessionID, "id": callID,
+		"toOwner": toOwner, "fromOwner": fromOwner,
 	})
 }
 

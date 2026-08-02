@@ -16,6 +16,12 @@ type State = {
   incoming: IncomingPayload | null;
   quality: Map<string, QualitySample>;
   marks: Map<string, SetupMark[]>;
+  // Whether the peer is currently sending video, keyed by call id. Driven by the
+  // mid-call `call-video-state` broker event (1 = Enabled, 0 = Disabled).
+  peerVideoActive: Map<string, boolean>;
+  onHold: Map<string, boolean>;
+  recording: Map<string, boolean>;
+  pendingTransfer: { sessionId: string; callId: string; fromOwner: string } | null;
 };
 
 export const useCalls = create<State>(() => ({
@@ -24,6 +30,10 @@ export const useCalls = create<State>(() => ({
   incoming: null,
   quality: new Map(),
   marks: new Map(),
+  peerVideoActive: new Map(),
+  onHold: new Map(),
+  recording: new Map(),
+  pendingTransfer: null,
 }));
 
 let wired = false;
@@ -38,7 +48,10 @@ export const ensureCallsWired = (): void => {
         const ids = new Set(ev.calls.map((c) => c.callId));
         const quality = new Map([...s.quality].filter(([id]) => ids.has(id)));
         const marks = new Map([...s.marks].filter(([id]) => ids.has(id)));
-        return { calls: ev.calls, quality, marks };
+        const peerVideoActive = new Map(
+          [...s.peerVideoActive].filter(([id]) => ids.has(id)),
+        );
+        return { calls: ev.calls, quality, marks, peerVideoActive };
       });
     } else if (ev.type === "call-status") {
       useCalls.setState((s) => ({
@@ -82,6 +95,36 @@ export const ensureCallsWired = (): void => {
         ]);
         return { marks: next };
       });
+    } else if (ev.type === "call-video-state") {
+      useCalls.setState((s) => {
+        if (!s.calls.some((c) => c.callId === ev.id)) return s;
+        const active = ev.state === 1;
+        const next = new Map(s.peerVideoActive);
+        next.set(ev.id, active);
+        return { peerVideoActive: next };
+      });
+    } else if (ev.type === "call-hold-state") {
+      useCalls.setState((s) => {
+        const next = new Map(s.onHold);
+        next.set(ev.id, ev.onHold);
+        return { onHold: next };
+      });
+    } else if (ev.type === "call-record-state") {
+      useCalls.setState((s) => {
+        const next = new Map(s.recording);
+        next.set(ev.id, ev.recording);
+        return { recording: next };
+      });
+    } else if (ev.type === "call-transfer") {
+      if (ev.toOwner === getClientId()) {
+        useCalls.setState({
+          pendingTransfer: {
+            sessionId: ev.sessionId,
+            callId: ev.id,
+            fromOwner: ev.fromOwner,
+          },
+        });
+      }
     } else if (ev.type === "call-ended") {
       useCalls.setState((s) => {
         const conn = s.ownConnections.get(ev.id);
@@ -92,12 +135,22 @@ export const ensureCallsWired = (): void => {
         nextQuality.delete(ev.id);
         const nextMarks = new Map(s.marks);
         nextMarks.delete(ev.id);
+        const nextPeerVideo = new Map(s.peerVideoActive);
+        nextPeerVideo.delete(ev.id);
+        const nextHold = new Map(s.onHold);
+        nextHold.delete(ev.id);
+        const nextRec = new Map(s.recording);
+        nextRec.delete(ev.id);
         return {
           calls: s.calls.filter((c) => c.callId !== ev.id),
           ownConnections: next,
           quality: nextQuality,
           marks: nextMarks,
+          peerVideoActive: nextPeerVideo,
+          onHold: nextHold,
+          recording: nextRec,
           incoming: s.incoming?.callId === ev.id ? null : s.incoming,
+          pendingTransfer: s.pendingTransfer?.callId === ev.id ? null : s.pendingTransfer,
         };
       });
       void queryClient.invalidateQueries({ queryKey: queryKeys.history });
@@ -110,6 +163,7 @@ export const ensureCallsWired = (): void => {
           peerName: ev.peerName,
           peerPhotoUrl: ev.peerPhotoUrl,
           offeredAt: ev.offeredAt,
+          isVideo: ev.isVideo,
         },
       });
     } else if (ev.type === "incoming-claimed") {
@@ -132,3 +186,6 @@ export const registerOwnConnection = (id: string, conn: OpenCall): void => {
 };
 
 export const clearIncoming = (): void => useCalls.setState({ incoming: null });
+
+export const clearPendingTransfer = (): void =>
+  useCalls.setState({ pendingTransfer: null });

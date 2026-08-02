@@ -175,6 +175,23 @@ func NewWhatsAppOpusSession(ssrc uint32) *RtpSession {
 	return NewRtpSession(ssrc, core.PayloadTypeWhatsAppOpus, 16000, 960)
 }
 
+// NewWhatsAppH264Session builds an RTP session for the H.264 video stream: PT 97
+// on the 90 kHz video clock. Video packets carry explicit per-frame timestamps
+// (see CreatePacketAt) rather than the fixed per-packet advance audio uses.
+func NewWhatsAppH264Session(ssrc uint32) *RtpSession {
+	return NewRtpSession(ssrc, core.PayloadTypeWhatsAppH264, 90000, 0)
+}
+
+// CreatePacketAt builds an RTP packet with an explicit timestamp, advancing only
+// the sequence number. All packets belonging to one video access unit share a
+// timestamp; the caller sets marker=true on the final packet of the frame.
+func (s *RtpSession) CreatePacketAt(payload []byte, ts uint32, marker bool) *RtpPacket {
+	header := NewRtpHeader(s.payloadType, s.sequenceNumber, ts, s.ssrc)
+	header.Marker = marker
+	s.sequenceNumber++
+	return &RtpPacket{Header: header, Payload: payload}
+}
+
 func (s *RtpSession) CreatePacket(payload []byte, marker bool) *RtpPacket {
 	return s.CreatePacketWithDuration(payload, s.samplesPerPacket, marker)
 }
@@ -182,6 +199,8 @@ func (s *RtpSession) CreatePacket(payload []byte, marker bool) *RtpPacket {
 func (s *RtpSession) AdvanceTimestamp(samples uint32) {
 	s.timestamp += samples
 }
+
+func (s *RtpSession) Ssrc() uint32 { return s.ssrc }
 
 func RTPSsrc(data []byte) uint32 {
 	return uint32(data[8])<<24 | uint32(data[9])<<16 | uint32(data[10])<<8 | uint32(data[11])

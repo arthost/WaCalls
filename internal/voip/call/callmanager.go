@@ -32,6 +32,20 @@ type CallManager struct {
 	srtp       *engine.SrtpManager
 	relay      RelayTransport
 
+	videoRtpSession *media.RtpSession
+	videoSelfSsrc   uint32
+	videoPeerSsrc   uint32
+	firstVideoSent  bool
+	videoEnabled    bool
+
+	ownDeviceJid  string
+	peerDeviceJid string
+
+	holdActive   bool
+	holdMusic    []float32
+	holdPos      int
+	currentScope *engine.CallScope
+
 	selfSsrc      uint32
 	peerSsrcs     []uint32
 	actualPeerSet bool
@@ -70,12 +84,14 @@ type CallManager struct {
 	declaredSelf map[uint32]bool
 	extAttached  bool
 
-	OnStateChange func(*CallInfo)
-	OnIncoming    func(*CallInfo)
-	OnEnded       func(*CallInfo)
-	OnPeerAudio   func([]float32)
-	OnQuality     func(callID string, q core.CallQuality)
-	OnMark        func(callID string, mark string, elapsedMs int64)
+	OnStateChange    func(*CallInfo)
+	OnIncoming       func(*CallInfo)
+	OnEnded          func(*CallInfo)
+	OnPeerAudio      func([]float32)
+	OnPeerVideo      func(annexb []byte, ts90 uint32, keyframe bool)
+	OnPeerVideoState func(state int)
+	OnQuality        func(callID string, q core.CallQuality)
+	OnMark           func(callID string, mark string, elapsedMs int64)
 }
 
 func NewCallManager(sock core.VoipSocket, log *slog.Logger, exts ...engine.Extension) *CallManager {
@@ -116,7 +132,7 @@ func (m *CallManager) emitState() {
 	}
 }
 
-func (m *CallManager) StartCall(ctx context.Context, callID string, peerJid types.JID) error {
+func (m *CallManager) StartCall(ctx context.Context, callID string, peerJid types.JID, video bool) error {
 	m.mu.Lock()
 	if m.currentCall != nil && !m.currentCall.IsEnded() {
 		m.mu.Unlock()
@@ -124,6 +140,9 @@ func (m *CallManager) StartCall(ctx context.Context, callID string, peerJid type
 	}
 
 	mediaType := core.CallMediaTypeAudio
+	if video {
+		mediaType = core.CallMediaTypeVideo
+	}
 	creator := m.sock.OwnLID()
 	if creator.IsEmpty() {
 		creator = m.sock.OwnPN()
@@ -141,9 +160,12 @@ func (m *CallManager) StartCall(ctx context.Context, callID string, peerJid type
 	m.selfSsrc = media.GenerateSecureSsrc(callID, selfJid, 0)
 	m.replaceRtpSession(media.NewWhatsAppOpusSession(m.selfSsrc))
 	m.peerSsrcs = []uint32{media.GenerateSecureSsrc(callID, resolved.String(), 0)}
+	if video {
+		m.deriveVideoSsrcsLocked(callID, selfJid, resolved.String())
+	}
 	m.mu.Unlock()
 
-	offer, err := signaling.BuildOfferStanza(ctx, m.sock, callID, callKey, resolved)
+	offer, err := signaling.BuildOfferStanza(ctx, m.sock, callID, callKey, resolved, video)
 	if err != nil {
 		return err
 	}
@@ -182,11 +204,12 @@ func (m *CallManager) AcceptCall(ctx context.Context, callID string) error {
 	key := call.EncryptionKey
 	peer := wanode.MustJID(call.PeerJid)
 	creator := wanode.MustJID(call.CallCreator)
+	video := call.MediaType == core.CallMediaTypeVideo
 	relayData := call.RelayData
 	m.mu.Unlock()
 
 	if key != nil {
-		acceptNode, err := signaling.BuildAcceptStanza(ctx, m.sock, callID, key, peer, creator)
+		acceptNode, err := signaling.BuildAcceptStanza(ctx, m.sock, callID, key, peer, creator, video)
 		if err != nil {
 			m.log.Error("build accept failed", "err", err)
 		} else if err := m.sock.SendNode(ctx, acceptNode); err != nil {
@@ -207,6 +230,7 @@ func (m *CallManager) AcceptCall(ctx context.Context, callID string) error {
 func (m *CallManager) setupIncomingMedia(call *CallInfo, relayData *core.RelayData) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	video := call.MediaType == core.CallMediaTypeVideo
 	if len(relayData.ParticipantJids) > 0 {
 		ourBase := wanode.CleanJID(m.ownCredJid())
 		ourDeviceJid := ensureDeviceJid(findOurDevice(relayData.ParticipantJids, ourBase, m.ownCredJid()))
@@ -214,12 +238,19 @@ func (m *CallManager) setupIncomingMedia(call *CallInfo, relayData *core.RelayDa
 			m.selfSsrc = newSelf
 			m.replaceRtpSession(media.NewWhatsAppOpusSession(newSelf))
 		}
+		peerDeviceJid := ""
 		if peer := firstPeerDevice(relayData.ParticipantJids, ourBase); peer != "" {
-			m.peerSsrcs = []uint32{media.GenerateSecureSsrc(call.CallID, ensureDeviceJid(peer), 0)}
+			peerDeviceJid = ensureDeviceJid(peer)
+			m.peerSsrcs = []uint32{media.GenerateSecureSsrc(call.CallID, peerDeviceJid, 0)}
 			m.actualPeerSet = true
+		}
+		m.rememberDeviceJidsLocked(ourDeviceJid, peerDeviceJid)
+		if video {
+			m.deriveVideoSsrcsLocked(call.CallID, ourDeviceJid, peerDeviceJid)
 		}
 	}
 	m.relay.SetSubscriptionSsrc(firstSsrc(m.peerSsrcs))
+	m.applyStreamSsrcsLocked()
 	m.initSrtpKeysLocked()
 }
 

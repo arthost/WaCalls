@@ -70,6 +70,17 @@ export type Messages = {
     jitter: string;
     loss: string;
     endCall: string;
+    enableCamera: string;
+    disableCamera: string;
+    hold: string;
+    resume: string;
+    transfer: string;
+    record: string;
+    stopRecord: string;
+    onHold: string;
+    recording: string;
+    transferTitle: string;
+    transferPrompt: string;
   };
   dialer: {
     title: string;
@@ -93,6 +104,7 @@ export type Messages = {
     title: string;
     accept: string;
     reject: string;
+    video: string;
   };
   connection: {
     reconnecting: string;

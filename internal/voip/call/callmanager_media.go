@@ -53,10 +53,12 @@ func (m *CallManager) ensureExtensionsAttachedLocked(ourDeviceJid, peerDeviceJid
 		PeerDeviceJID:   peerDeviceJid,
 		Relay:           m.relay,
 		SendAudioFrame:  m.sendAudioFrame,
+		SendVideoFrame:  m.sendVideoFrame,
 		OnRTP:           m.registerRTPHandler,
 		DeclareSelfSSRC: m.declareSelfSSRC,
 		Observer:        m.observer,
 	}
+	m.currentScope = scope
 	for _, e := range m.extensions {
 		if err := e.Attach(scope); err != nil {
 			m.log.Error("extension attach failed", "ext", e.Name(), "err", err)
@@ -64,11 +66,18 @@ func (m *CallManager) ensureExtensionsAttachedLocked(ourDeviceJid, peerDeviceJid
 	}
 	if a, ok := engine.Capability[core.AudioSink](m.extensions); ok {
 		a.OnPeerPCM(func(pcm []float32) {
+			m.mu.Lock()
+			held := m.holdActive
+			m.mu.Unlock()
+			if held {
+				return
+			}
 			if m.OnPeerAudio != nil {
 				m.OnPeerAudio(pcm)
 			}
 		})
 	}
+	m.wireVideoExtensionLocked()
 }
 
 func (m *CallManager) sendAudioFrame(encoded []byte, frameSamples int) error {
@@ -253,4 +262,58 @@ func (t *srtpDropTally) snapshotAndReset() map[string]int64 {
 	out := t.counts
 	t.counts = nil
 	return out
+}
+
+func (m *CallManager) Hold(holdMusic []float32) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.currentCall == nil {
+		return errors.New("no active call")
+	}
+	if err := m.currentCall.ApplyTransition(Transition{Type: TransitionHold}); err != nil {
+		return err
+	}
+	m.holdActive = true
+	m.holdMusic = holdMusic
+	m.holdPos = 0
+	if m.currentScope != nil {
+		m.currentScope.FrameOverride = func(out []float32) bool {
+			return m.fillHoldMusic(out)
+		}
+	}
+	m.emitState()
+	return nil
+}
+
+func (m *CallManager) Resume() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.currentCall == nil {
+		return nil
+	}
+	if m.currentCall.StateData.State == core.CallStateOnHold {
+		if err := m.currentCall.ApplyTransition(Transition{Type: TransitionResume}); err != nil {
+			return err
+		}
+	}
+	m.holdActive = false
+	if m.currentScope != nil {
+		m.currentScope.FrameOverride = nil
+	}
+	m.emitState()
+	return nil
+}
+
+func (m *CallManager) fillHoldMusic(out []float32) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.holdActive || len(m.holdMusic) == 0 {
+		return false
+	}
+	n := len(out)
+	for i := 0; i < n; i++ {
+		out[i] = m.holdMusic[m.holdPos]
+		m.holdPos = (m.holdPos + 1) % len(m.holdMusic)
+	}
+	return true
 }

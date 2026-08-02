@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"wacalls/internal/app/assets"
 	"wacalls/internal/voip/call"
 	"wacalls/internal/voip/core"
+	"wacalls/internal/voip/media"
 
 	"go.mau.fi/whatsmeow/types"
 )
@@ -26,7 +29,7 @@ func (s *Session) HasCall(callID string) bool {
 	return ok
 }
 
-func (s *Session) StartCall(ctx context.Context, phone string) (StartedCall, error) {
+func (s *Session) StartCall(ctx context.Context, phone string, video bool) (StartedCall, error) {
 	if max := s.mgr.maxCalls; max > 0 && s.calls.Count() >= max {
 		return StartedCall{}, ErrTooManyCalls
 	}
@@ -54,7 +57,7 @@ func (s *Session) StartCall(ctx context.Context, phone string) (StartedCall, err
 	}
 
 	peer := types.NewJID(phone, types.DefaultUserServer)
-	callID, err := s.calls.StartCall(ctx, peer)
+	callID, err := s.calls.StartCall(ctx, peer, video)
 	if err != nil && strings.Contains(err.Error(), "websocket not connected") {
 		s.log.Warn("Call offer failed with websocket disconnected — forcing reconnect & retry", "session", s.id)
 		s.client.Disconnect()
@@ -63,7 +66,7 @@ func (s *Session) StartCall(ctx context.Context, phone string) (StartedCall, err
 		for !s.client.IsConnected() && time.Now().Before(deadline) {
 			time.Sleep(200 * time.Millisecond)
 		}
-		callID, err = s.calls.StartCall(ctx, peer)
+		callID, err = s.calls.StartCall(ctx, peer, video)
 	}
 
 	if err != nil {
@@ -105,6 +108,36 @@ func (s *Session) EndCall(ctx context.Context, callID string) error {
 	return err
 }
 
+func (s *Session) EnableVideo(ctx context.Context, callID string) error {
+	return s.calls.EnableVideo(ctx, callID)
+}
+
+func (s *Session) HoldCall(ctx context.Context, callID string) error {
+	diskPath := filepath.Join(s.mgr.cfg.DataDir, "hold-music.wav")
+	music := assets.LoadHoldMusic(diskPath)
+	err := s.calls.HoldCall(ctx, callID, music)
+	if err == nil {
+		s.mgr.broker.EmitHoldState(s.id, callID, true)
+	}
+	return err
+}
+
+func (s *Session) ResumeCall(ctx context.Context, callID string) error {
+	err := s.calls.ResumeCall(ctx, callID)
+	if err == nil {
+		s.mgr.broker.EmitHoldState(s.id, callID, false)
+	}
+	return err
+}
+
+func (s *Session) TransferCall(ctx context.Context, callID, toOwner, fromOwner string) error {
+	if err := s.HoldCall(ctx, callID); err != nil {
+		return err
+	}
+	s.mgr.broker.EmitTransfer(s.id, callID, toOwner, fromOwner)
+	return nil
+}
+
 func (s *Session) AttachBrowser(callID, offerSDP string) (string, error) {
 	cm, ok := s.calls.Get(callID)
 	if !ok {
@@ -114,8 +147,16 @@ func (s *Session) AttachBrowser(callID, offerSDP string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	bridge.OnBrowserPCM = func(pcm []float32) { cm.FeedCapturedPCM(pcm) }
+	bridge.OnBrowserPCM = func(pcm []float32) {
+		cm.FeedCapturedPCM(pcm)
+		if rec := s.getRecorder(callID); rec != nil {
+			rec.WriteOperator(pcm)
+		}
+	}
+	bridge.OnBrowserVideo = func(annexb []byte, ts90 uint32) { cm.FeedCapturedVideo(annexb, ts90) }
 	bridge.OnTerminalICE = func() { go s.terminateCall(callID, core.EndCallReasonUserEnded) }
 	s.setBridge(callID, bridge)
+	_ = cm.Resume()
+	s.mgr.broker.EmitHoldState(s.id, callID, false)
 	return answer, nil
 }

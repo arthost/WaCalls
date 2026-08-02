@@ -109,7 +109,9 @@ func (a *Audio) startSendLoopLocked() {
 				continue
 			}
 			frame := silence
-			if len(a.captureBuf) >= frameSize {
+			if a.scope.FrameOverride != nil && a.scope.FrameOverride(voiced) {
+				frame = voiced
+			} else if len(a.captureBuf) >= frameSize {
 				copy(voiced, a.captureBuf[:frameSize])
 				frame = voiced
 				a.captureBuf = a.captureBuf[frameSize:]

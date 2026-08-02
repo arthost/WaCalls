@@ -77,10 +77,10 @@ func (c *Client) Drain() []*CallManager {
 	return out
 }
 
-func (c *Client) StartCall(ctx context.Context, peer types.JID) (string, error) {
+func (c *Client) StartCall(ctx context.Context, peer types.JID, video bool) (string, error) {
 	callID := signaling.GenerateCallID()
 	cm := c.createCall(callID)
-	if err := cm.StartCall(ctx, callID, peer); err != nil {
+	if err := cm.StartCall(ctx, callID, peer, video); err != nil {
 		c.Remove(callID)
 		return "", err
 	}
@@ -164,6 +164,42 @@ func (c *Client) HandleTerminate(node *waBinary.Node) {
 	if cm, ok := c.get(info.CallID); ok {
 		cm.HandleCallTerminate(node)
 	}
+}
+
+// HandleVideoState routes an inbound mid-call <call><video state=N> stanza to
+// its CallManager. The call-id lives on the <video> child (not the <call>
+// attrs), so we resolve it via ParseVideoState rather than ExtractNodeInfo.
+func (c *Client) HandleVideoState(ctx context.Context, node *waBinary.Node, peer types.JID) {
+	parsed := signaling.ParseVideoState(node)
+	if !parsed.Found || parsed.CallID == "" {
+		return
+	}
+	if cm, ok := c.get(parsed.CallID); ok {
+		cm.HandleVideoState(ctx, node)
+	}
+}
+
+// EnableVideo turns on the local camera stream mid-call (audio→video upgrade)
+// for the given call, delegating to the CallManager.
+func (c *Client) EnableVideo(ctx context.Context, callID string) error {
+	if cm, ok := c.get(callID); ok {
+		return cm.EnableLocalVideo(ctx)
+	}
+	return &CallError{"no call with id " + callID}
+}
+
+func (c *Client) HoldCall(ctx context.Context, callID string, holdMusic []float32) error {
+	if cm, ok := c.get(callID); ok {
+		return cm.Hold(holdMusic)
+	}
+	return &CallError{"no call with id " + callID}
+}
+
+func (c *Client) ResumeCall(ctx context.Context, callID string) error {
+	if cm, ok := c.get(callID); ok {
+		return cm.Resume()
+	}
+	return &CallError{"no call with id " + callID}
 }
 
 func (c *Client) AcceptCall(ctx context.Context, callID string) error {

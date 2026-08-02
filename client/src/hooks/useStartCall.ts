@@ -6,9 +6,10 @@ import { registerOwnConnection } from "@/stores/calls";
 
 export const useStartCall = (sid: string, micId: string | null) =>
   useMutation({
-    mutationFn: async (vars: { phone: string }) => {
-      const { call } = await startCall(sid, vars.phone);
-      const conn = await openCall(sid, call.callId, micId);
+    mutationFn: async (vars: { phone: string; isVideo?: boolean }) => {
+      const isVideo = vars.isVideo ?? false;
+      const { call } = await startCall(sid, vars.phone, isVideo);
+      const conn = await openCall(sid, call.callId, micId, isVideo);
       registerOwnConnection(call.callId, conn);
       return call.callId;
     },

@@ -29,6 +29,11 @@ var apiRoutes = []struct {
 	{"POST", "/sessions/{sid}/calls/{id}/webrtc", (*Server).handleWebRTC},
 	{"POST", "/sessions/{sid}/calls/{id}/accept", (*Server).handleAccept},
 	{"POST", "/sessions/{sid}/calls/{id}/reject", (*Server).handleReject},
+	{"POST", "/sessions/{sid}/calls/{id}/video", (*Server).handleEnableVideo},
+	{"POST", "/sessions/{sid}/calls/{id}/hold", (*Server).handleHold},
+	{"POST", "/sessions/{sid}/calls/{id}/transfer", (*Server).handleTransfer},
+	{"POST", "/sessions/{sid}/calls/{id}/record", (*Server).handleRecord},
+	{"GET", "/holdmusic", (*Server).handleHoldMusicGet},
 	{"POST", "/sessions/{sid}/calls/{id}/control", (*Server).handleCallControl},
 	{"POST", "/sessions/{sid}/calls/{id}/lobby", (*Server).handleCallLobby},
 	{"POST", "/sessions/{sid}/calls/{id}/participants", (*Server).handleCallParticipants},
@@ -67,6 +72,7 @@ func (s *Server) routes() http.Handler {
 	root.HandleFunc("GET /api/openapi.yaml", handleOpenAPI)
 	root.Handle("GET /api/auth/status", s.withRateLimit(maxBytes(http.HandlerFunc(s.handleAuthStatus))))
 	root.Handle("POST /api/login", s.withLoginRateLimit(s.withRateLimit(maxBytes(http.HandlerFunc(s.handleLogin)))))
+	root.Handle("POST /api/holdmusic", s.withRateLimit(s.withAuth(http.HandlerFunc(s.handleHoldMusicUpload))))
 	root.Handle("/api/", s.withRateLimit(s.withAuth(maxBytes(api))))
 	if s.debug {
 		root.Handle("/debug/", loopbackOnly(s.withAuth(api)))

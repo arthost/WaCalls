@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Phone, PhoneOff } from "lucide-react";
+import { Phone, PhoneOff, Video } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -66,20 +66,31 @@ const startRingLoop = (): RingHandle | null => {
 
 export const IncomingCallModal = () => {
   const incoming = useCalls((s) => s.incoming);
+  const pendingTransfer = useCalls((s) => s.pendingTransfer);
+  const calls = useCalls((s) => s.calls);
   const micId = useDevices((s) => s.micId);
   const accept = useAcceptCall(micId);
   const reject = useRejectCall();
   const busy = accept.isPending || reject.isPending;
   const t = useT();
 
+  const activeCall = incoming || (pendingTransfer ? {
+    sessionId: pendingTransfer.sessionId,
+    callId: pendingTransfer.callId,
+    peerName: `Transferência de ${pendingTransfer.fromOwner}`,
+    peer: pendingTransfer.callId,
+    peerPhotoUrl: undefined,
+    isVideo: false,
+  } : null);
+
   useEffect(() => {
-    if (!incoming) return;
+    if (!activeCall) return;
     const ring = startRingLoop();
     return () => ring?.stop();
-  }, [incoming]);
+  }, [activeCall]);
 
   return (
-    <Dialog open={!!incoming}>
+    <Dialog open={!!activeCall}>
       <DialogContent
         showCloseButton={false}
         onEscapeKeyDown={(e) => e.preventDefault()}
@@ -90,14 +101,20 @@ export const IncomingCallModal = () => {
         <DialogHeader className="items-center text-center">
           <div className="mb-2">
             <PeerAvatar
-              name={incoming?.peerName || incoming?.peer || ""}
-              photoUrl={incoming?.peerPhotoUrl}
+              name={activeCall?.peerName || activeCall?.peer || ""}
+              photoUrl={activeCall?.peerPhotoUrl}
             />
           </div>
-          <DialogTitle>{t.incoming.title}</DialogTitle>
+          <DialogTitle>{pendingTransfer ? "Transferência de Chamada" : t.incoming.title}</DialogTitle>
           <DialogDescription className="truncate">
-            {incoming?.peerName || incoming?.peer}
+            {activeCall?.peerName || activeCall?.peer}
           </DialogDescription>
+          {activeCall?.isVideo && (
+            <div className="text-muted-foreground mt-1 flex items-center justify-center gap-1 text-xs">
+              <Video className="h-3.5 w-3.5" />
+              {t.incoming.video}
+            </div>
+          )}
         </DialogHeader>
         <div className="mt-2 flex items-center justify-center gap-6">
           <Button
@@ -105,13 +122,16 @@ export const IncomingCallModal = () => {
             size="icon"
             className="h-14 w-14 rounded-full"
             disabled={busy}
-            onClick={() =>
-              incoming &&
-              reject.mutate({
-                sid: incoming.sessionId,
-                callId: incoming.callId,
-              })
-            }
+            onClick={() => {
+              if (incoming) {
+                reject.mutate({
+                  sid: incoming.sessionId,
+                  callId: incoming.callId,
+                });
+              } else if (pendingTransfer) {
+                useCalls.setState({ pendingTransfer: null });
+              }
+            }}
             aria-label={t.incoming.reject}
           >
             <PhoneOff className="h-6 w-6" />
@@ -120,16 +140,25 @@ export const IncomingCallModal = () => {
             size="icon"
             className="h-14 w-14 rounded-full"
             disabled={busy}
-            onClick={() =>
-              incoming &&
-              accept.mutate({
-                sid: incoming.sessionId,
-                callId: incoming.callId,
-              })
-            }
+            onClick={() => {
+              if (activeCall) {
+                accept.mutate({
+                  sid: activeCall.sessionId,
+                  callId: activeCall.callId,
+                  isVideo: activeCall.isVideo,
+                });
+                if (pendingTransfer) {
+                  useCalls.setState({ pendingTransfer: null });
+                }
+              }
+            }}
             aria-label={t.incoming.accept}
           >
-            <Phone className="h-6 w-6" />
+            {activeCall?.isVideo ? (
+              <Video className="h-6 w-6" />
+            ) : (
+              <Phone className="h-6 w-6" />
+            )}
           </Button>
         </div>
       </DialogContent>

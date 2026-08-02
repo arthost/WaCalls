@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, PhoneOff, WifiOff } from "lucide-react";
+import { Check, PhoneOff, Video, VideoOff, WifiOff, Pause, Play, Disc, Forward } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { attachMeter } from "@/lib/audio-meter";
+import { enableVideo, holdCall, resumeCall, transferCall, setRecording } from "@/services/calls";
 import { useCalls } from "@/stores/calls";
 import { useDevices } from "@/stores/devices";
 import { useEndCall } from "@/hooks/useEndCall";
@@ -246,13 +247,36 @@ export const CallCard = ({ call }: { call: CallSummary }) => {
   const conn = useCalls((s) => s.ownConnections.get(call.callId));
   const quality = useCalls((s) => s.quality.get(call.callId));
   const marks = useCalls((s) => s.marks.get(call.callId));
+  const peerVideoActive = useCalls((s) => s.peerVideoActive.get(call.callId));
   const outDeviceId = useDevices((s) => s.outId);
   const endCall = useEndCall();
   const t = useT();
   const [, force] = useState(0);
   const [micDb, setMicDb] = useState(-60);
   const [peerDb, setPeerDb] = useState(-60);
+  const [cameraOn, setCameraOn] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const localVideoRef = useRef<HTMLVideoElement>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  // Show the video surface when either side has video: our camera is on, or the
+  // peer has pushed video (either a call that started as video, or a mid-call
+  // upgrade signalled via `peerVideoActive`).
+  const hasVideo =
+    !!conn?.localVideoStream || !!conn?.remoteVideoStream || !!peerVideoActive;
+
+  const toggleCamera = async () => {
+    if (!conn) return;
+    if (conn.videoActive) {
+      conn.stopVideo();
+      setCameraOn(false);
+    } else {
+      // Signal the WhatsApp leg first so the peer accepts the upgrade, then open
+      // the local camera and start pushing H.264 over the datachannel.
+      await enableVideo(call.sessionId, call.callId).catch(() => {});
+      const stream = await conn.startVideo();
+      setCameraOn(stream !== null);
+    }
+  };
 
   useEffect(() => {
     const timer = setInterval(() => force((n) => n + 1), 1000);
@@ -285,6 +309,41 @@ export const CallCard = ({ call }: { call: CallSummary }) => {
     el.setSinkId(outDeviceId).catch(() => {});
   }, [outDeviceId, conn]);
 
+  useEffect(() => {
+    if (!conn) return;
+    if (localVideoRef.current && conn.localVideoStream) {
+      localVideoRef.current.srcObject = conn.localVideoStream;
+      localVideoRef.current.play().catch(() => {});
+    }
+    if (remoteVideoRef.current && conn.remoteVideoStream) {
+      remoteVideoRef.current.srcObject = conn.remoteVideoStream;
+      remoteVideoRef.current.play().catch(() => {});
+    }
+  }, [conn, cameraOn, peerVideoActive, hasVideo]);
+
+  const isHeld = useCalls((s) => s.onHold.get(call.callId)) ?? false;
+  const isRecording = useCalls((s) => s.recording.get(call.callId)) ?? false;
+  const [showTransferInput, setShowTransferInput] = useState(false);
+  const [transferOperator, setTransferOperator] = useState("");
+
+  const toggleHold = async () => {
+    if (isHeld) {
+      await resumeCall(call.sessionId, call.callId);
+    } else {
+      await holdCall(call.sessionId, call.callId);
+    }
+  };
+
+  const toggleRecord = async () => {
+    await setRecording(call.sessionId, call.callId, !isRecording);
+  };
+
+  const handleTransferSubmit = async () => {
+    if (!transferOperator.trim()) return;
+    await transferCall(call.sessionId, call.callId, transferOperator.trim());
+    setShowTransferInput(false);
+  };
+
   return (
     <Card>
       <CardContent className="space-y-3 p-4">
@@ -298,34 +357,142 @@ export const CallCard = ({ call }: { call: CallSummary }) => {
               <p className="truncate font-medium">
                 {call.peerName || call.peer}
               </p>
-              <StatusBadge
-                tone={callStatusTone(call.status)}
-                pulse={callStatusPulse(call.status)}
-                className="mt-1"
-              >
-                {call.status === "connected"
-                  ? formatCallDuration(call.startedAt)
-                  : t.calls.status[call.status]}
-              </StatusBadge>
+              <div className="mt-1 flex items-center gap-1.5">
+                <StatusBadge
+                  tone={callStatusTone(call.status)}
+                  pulse={callStatusPulse(call.status)}
+                >
+                  {call.status === "connected"
+                    ? formatCallDuration(call.startedAt)
+                    : t.calls.status[call.status]}
+                </StatusBadge>
+                {isHeld && <StatusBadge tone="warn">{t.calls.onHold}</StatusBadge>}
+                {isRecording && <StatusBadge tone="bad">🔴 {t.calls.recording}</StatusBadge>}
+              </div>
             </div>
           </div>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="destructive"
-                size="icon"
-                onClick={() =>
-                  endCall.mutate({ sid: call.sessionId, callId: call.callId })
-                }
-                aria-label={t.calls.endCall}
-              >
-                <PhoneOff className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{t.calls.endCall}</TooltipContent>
-          </Tooltip>
+          <div className="flex items-center gap-2">
+            {conn && call.status === "connected" && (
+              <>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant={isHeld ? "secondary" : "outline"}
+                      size="icon"
+                      onClick={() => void toggleHold()}
+                      aria-label={isHeld ? t.calls.resume : t.calls.hold}
+                    >
+                      {isHeld ? <Play className="h-4 w-4 text-amber-500" /> : <Pause className="h-4 w-4" />}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>{isHeld ? t.calls.resume : t.calls.hold}</TooltipContent>
+                </Tooltip>
+
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant={isRecording ? "destructive" : "outline"}
+                      size="icon"
+                      onClick={() => void toggleRecord()}
+                      aria-label={isRecording ? t.calls.stopRecord : t.calls.record}
+                    >
+                      <Disc className={`h-4 w-4 ${isRecording ? "animate-pulse" : ""}`} />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>{isRecording ? t.calls.stopRecord : t.calls.record}</TooltipContent>
+                </Tooltip>
+
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => setShowTransferInput(!showTransferInput)}
+                      aria-label={t.calls.transfer}
+                    >
+                      <Forward className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>{t.calls.transfer}</TooltipContent>
+                </Tooltip>
+
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant={conn.videoActive ? "secondary" : "outline"}
+                      size="icon"
+                      onClick={() => void toggleCamera()}
+                      aria-label={
+                        conn.videoActive
+                          ? t.calls.disableCamera
+                          : t.calls.enableCamera
+                      }
+                    >
+                      {conn.videoActive ? (
+                        <VideoOff className="h-4 w-4" />
+                      ) : (
+                        <Video className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {conn.videoActive
+                      ? t.calls.disableCamera
+                      : t.calls.enableCamera}
+                  </TooltipContent>
+                </Tooltip>
+              </>
+            )}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="destructive"
+                  size="icon"
+                  onClick={() =>
+                    endCall.mutate({ sid: call.sessionId, callId: call.callId })
+                  }
+                  aria-label={t.calls.endCall}
+                >
+                  <PhoneOff className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{t.calls.endCall}</TooltipContent>
+            </Tooltip>
+          </div>
         </div>
+
+        {showTransferInput && (
+          <div className="flex items-center gap-2 p-2 bg-muted/40 rounded-md">
+            <input
+              type="text"
+              className="flex-1 text-xs px-2 py-1 bg-background border rounded"
+              placeholder="ID do Operador"
+              value={transferOperator}
+              onChange={(e) => setTransferOperator(e.target.value)}
+            />
+            <Button size="sm" className="h-7 text-xs px-2" onClick={() => void handleTransferSubmit()}>
+              Transferir
+            </Button>
+          </div>
+        )}
         {call.status === "reconnecting" && <ReconnectingNotice />}
+        {hasVideo && (
+          <div className="relative overflow-hidden rounded-md bg-black">
+            <video
+              ref={remoteVideoRef}
+              autoPlay
+              playsInline
+              className="aspect-video w-full bg-black object-cover"
+            />
+            <video
+              ref={localVideoRef}
+              autoPlay
+              playsInline
+              muted
+              className="absolute bottom-2 right-2 aspect-video w-24 rounded border border-white/20 bg-black object-cover shadow-lg"
+            />
+          </div>
+        )}
         {marks && marks.length > 0 && (
           <ConnectionTimeline marks={marks} status={call.status} />
         )}

@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -10,6 +11,8 @@ import (
 type Config struct {
 	Addr           string
 	DBPath         string
+	DataDir        string
+	RecordingsDir  string
 	StaticDir      string
 	Version        string
 	Debug          bool
@@ -28,9 +31,12 @@ type Config struct {
 }
 
 func LoadConfig(addr, dbPath, staticDir string, debug bool, maxCalls int) Config {
+	dataDir := filepath.Dir(dbPath)
 	return Config{
 		Addr:           addr,
 		DBPath:         dbPath,
+		DataDir:        dataDir,
+		RecordingsDir:  filepath.Join(dataDir, "recordings"),
 		StaticDir:      staticDir,
 		Debug:          debug,
 		MaxCalls:       maxCalls,

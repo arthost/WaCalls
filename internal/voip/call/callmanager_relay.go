@@ -195,6 +195,7 @@ func (m *CallManager) connectRelays(endpoints []core.RelayEndpoint) {
 	}
 	m.relay.SetSsrc(m.selfSsrc)
 	m.relay.SetSubscriptionSsrc(firstSsrc(m.peerSsrcs))
+	m.applyStreamSsrcsLocked()
 	m.mu.Unlock()
 	m.relay.SetObserver(m.observer)
 	pprof.Do(context.Background(), pprof.Labels("call_id", callID), func(context.Context) {
@@ -225,6 +226,13 @@ func (m *CallManager) cleanupMedia() {
 	}
 	m.replaceRtpSession(nil)
 	m.srtp = nil
+	m.videoRtpSession = nil
+	m.videoSelfSsrc = 0
+	m.videoPeerSsrc = 0
+	m.firstVideoSent = false
+	m.videoEnabled = false
+	m.ownDeviceJid = ""
+	m.peerDeviceJid = ""
 	m.firstPacketSent = false
 	m.initialTransportSent = false
 	m.outgoingPreacceptSent = false

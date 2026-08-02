@@ -53,6 +53,7 @@ export type BrokerEvent =
       peerName?: string;
       peerPhotoUrl?: string;
       offeredAt: number;
+      isVideo?: boolean;
     }
   | { type: "incoming-claimed"; sessionId: string; id: string; owner: string }
   | {
@@ -70,6 +71,31 @@ export type BrokerEvent =
       id: string;
       mark: string;
       elapsedMs: number;
+    }
+  | {
+      type: "call-video-state";
+      sessionId: string;
+      id: string;
+      state: number;
+    }
+  | {
+      type: "call-hold-state";
+      sessionId: string;
+      id: string;
+      onHold: boolean;
+    }
+  | {
+      type: "call-record-state";
+      sessionId: string;
+      id: string;
+      recording: boolean;
+    }
+  | {
+      type: "call-transfer";
+      sessionId: string;
+      id: string;
+      toOwner: string;
+      fromOwner: string;
     };
 
 type Listener = (ev: BrokerEvent) => void;

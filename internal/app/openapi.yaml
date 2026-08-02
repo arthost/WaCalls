@@ -305,6 +305,33 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         "429": { $ref: "#/components/responses/RateLimited" }
+  /api/sessions/{sid}/calls/{id}/video:
+    post:
+      operationId: enableVideo
+      summary: Enable the local camera mid-call (audio→video upgrade)
+      description: >
+        Sends a WhatsApp mid-call video-upgrade request (<video state=3>) to the
+        peer and derives the video SSRCs so the relay forwards both video streams.
+        The browser starts capturing/encoding once this returns.
+      parameters:
+        - $ref: "#/components/parameters/Sid"
+        - $ref: "#/components/parameters/CallId"
+      responses:
+        "200":
+          description: Video upgrade requested
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
   /api/sessions/{sid}/history:
     get:
       operationId: listHistory

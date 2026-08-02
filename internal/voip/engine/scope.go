@@ -14,9 +14,11 @@ type CallScope struct {
 	PeerDeviceJID   string
 	Relay           core.Relay
 	SendAudioFrame  func(encoded []byte, frameSamples int) error
+	SendVideoFrame  func(annexb []byte, ts90 uint32) error
 	OnRTP           func(pt uint8, handler func(pkt *media.RtpPacket))
 	DeclareSelfSSRC func(ssrc uint32)
 	Observer        core.CallObserver
+	FrameOverride   func(out []float32) bool
 }
 
 type Extension interface {

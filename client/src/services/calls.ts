@@ -1,8 +1,9 @@
 import { apiPost, apiDelete } from "@/lib/api";
 
-export const startCall = (sid: string, phone: string) =>
+export const startCall = (sid: string, phone: string, isVideo = false) =>
   apiPost<{ call: { callId: string } }>(`/api/sessions/${sid}/calls`, {
     phone,
+    is_video: isVideo,
   });
 
 export const acceptCall = (sid: string, callId: string) =>
@@ -19,3 +20,29 @@ export const rejectCall = (sid: string, callId: string) =>
 
 export const endCall = (sid: string, callId: string) =>
   apiDelete(`/api/sessions/${sid}/calls/${callId}`);
+
+export const enableVideo = (sid: string, callId: string) =>
+  apiPost<{ status: string }>(
+    `/api/sessions/${sid}/calls/${callId}/video`,
+    {},
+  );
+
+export const holdCall = (sid: string, callId: string) =>
+  apiPost<{ status: string }>(`/api/sessions/${sid}/calls/${callId}/hold`, {
+    action: "hold",
+  });
+
+export const resumeCall = (sid: string, callId: string) =>
+  apiPost<{ status: string }>(`/api/sessions/${sid}/calls/${callId}/hold`, {
+    action: "resume",
+  });
+
+export const transferCall = (sid: string, callId: string, toOwner: string) =>
+  apiPost<{ status: string }>(`/api/sessions/${sid}/calls/${callId}/transfer`, {
+    to: toOwner,
+  });
+
+export const setRecording = (sid: string, callId: string, on: boolean) =>
+  apiPost<{ status: string }>(`/api/sessions/${sid}/calls/${callId}/record`, {
+    action: on ? "start" : "stop",
+  });

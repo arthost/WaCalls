@@ -3,7 +3,10 @@ package app
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -43,13 +46,166 @@ func (s *Server) handleEndCall(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) handleEnableVideo(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionByID(w, r.PathValue("sid"))
+	if sess == nil {
+		return
+	}
+	id := r.PathValue("id")
+	if !sess.HasCall(id) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such call"})
+		return
+	}
+	if err := sess.EnableVideo(r.Context(), id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleHold(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionByID(w, r.PathValue("sid"))
+	if sess == nil {
+		return
+	}
+	id := r.PathValue("id")
+	if !sess.HasCall(id) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such call"})
+		return
+	}
+	var body struct {
+		Action string `json:"action"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	var err error
+	if body.Action == "resume" {
+		err = sess.ResumeCall(r.Context(), id)
+	} else {
+		err = sess.HoldCall(r.Context(), id)
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleTransfer(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionByID(w, r.PathValue("sid"))
+	if sess == nil {
+		return
+	}
+	id := r.PathValue("id")
+	if !sess.HasCall(id) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such call"})
+		return
+	}
+	var body struct {
+		To string `json:"to"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.To == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "to operator required"})
+		return
+	}
+	from := clientID(r)
+	if err := sess.TransferCall(r.Context(), id, body.To, from); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleRecord(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionByID(w, r.PathValue("sid"))
+	if sess == nil {
+		return
+	}
+	id := r.PathValue("id")
+	if !sess.HasCall(id) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such call"})
+		return
+	}
+	var body struct {
+		Action string `json:"action"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	var err error
+	if body.Action == "stop" {
+		err = sess.StopRecording(id)
+	} else {
+		err = sess.StartRecording(id)
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleHoldMusicGet(w http.ResponseWriter, r *http.Request) {
+	diskPath := filepath.Join(s.cfg.DataDir, "hold-music.wav")
+	st, err := os.Stat(diskPath)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"exists": false,
+			"name":   "Default Chime (Embedded)",
+			"size":   0,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"exists": true,
+		"name":   st.Name(),
+		"size":   st.Size(),
+	})
+}
+
+func (s *Server) handleHoldMusicUpload(w http.ResponseWriter, r *http.Request) {
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "file field required"})
+		return
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(file)
+	if err != nil || len(data) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to read upload file"})
+		return
+	}
+
+	if err := os.MkdirAll(s.cfg.DataDir, 0755); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	destPath := filepath.Join(s.cfg.DataDir, "hold-music.wav")
+	tempPath := destPath + ".tmp"
+
+	if err := os.WriteFile(tempPath, data, 0644); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if err := os.Rename(tempPath, destPath); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "ok",
+		"size":   len(data),
+	})
+}
+
 func (s *Server) doStartCall(sess *session.Session, w http.ResponseWriter, r *http.Request) {
 	if !sess.IsPaired() {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "not paired"})
 		return
 	}
 	var body struct {
-		Phone string `json:"phone"`
+		Phone   string `json:"phone"`
+		IsVideo bool   `json:"is_video"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Phone) == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "phone required"})
@@ -65,7 +221,7 @@ func (s *Server) doStartCall(sess *session.Session, w http.ResponseWriter, r *ht
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "operator already on a call"})
 		return
 	}
-	st, err := sess.StartCall(r.Context(), phone)
+	st, err := sess.StartCall(r.Context(), phone, body.IsVideo)
 	if errors.Is(err, session.ErrTooManyCalls) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "max concurrent calls"})
 		return
@@ -191,7 +347,7 @@ func (s *Server) handleStartGroupCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	st, err := sess.StartCall(r.Context(), cleanPhones[0])
+	st, err := sess.StartCall(r.Context(), cleanPhones[0], body.IsVideo)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -260,9 +416,9 @@ func (s *Server) handleCallParticipants(w http.ResponseWriter, r *http.Request) 
 	}
 	callID := r.PathValue("id")
 	var body struct {
-		Phone       string   `json:"phone"`
-		Action      string   `json:"action"` // "add" | "remove" | "rering"
-		PhonesList  []string `json:"phones"`
+		Phone      string   `json:"phone"`
+		Action     string   `json:"action"` // "add" | "remove" | "rering"
+		PhonesList []string `json:"phones"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Action == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "action required"})

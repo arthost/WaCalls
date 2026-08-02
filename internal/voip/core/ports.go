@@ -15,6 +15,15 @@ type AudioSink interface {
 	OnPeerPCM(handler func(pcm []float32))
 }
 
+// VideoSink is the video counterpart of AudioSink. The encoded H.264 (Annex-B)
+// never touches a codec on the Go side — FeedEncodedVideo takes frames captured
+// and encoded by the browser (with their 90 kHz timestamp) for packetization,
+// and OnPeerVideo delivers reassembled peer frames back toward the browser.
+type VideoSink interface {
+	FeedEncodedVideo(annexb []byte, ts90 uint32)
+	OnPeerVideo(handler func(annexb []byte, ts90 uint32, keyframe bool))
+}
+
 type Session struct {
 	ID   string
 	Name string

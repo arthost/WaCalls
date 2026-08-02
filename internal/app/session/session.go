@@ -15,6 +15,9 @@ import (
 	"wacalls/internal/voip/core"
 	"wacalls/internal/voip/engine"
 	"wacalls/internal/voip/extension/audio"
+	"wacalls/internal/voip/extension/video"
+	"wacalls/internal/voip/signaling"
+	"wacalls/internal/voip/wanode"
 	"wacalls/internal/wa"
 
 	"github.com/mdp/qrterminal/v3"
@@ -35,19 +38,23 @@ type Session struct {
 	bridgeMu sync.Mutex
 	bridges  map[string]*Bridge
 
+	recMu     sync.Mutex
+	recorders map[string]*media.WavRecorder
+
 	mu   sync.Mutex
 	auth events.AuthSnapshot
 }
 
 func newSession(mgr *Manager, id, name string, client *whatsmeow.Client) *Session {
 	s := &Session{
-		id:      id,
-		name:    name,
-		mgr:     mgr,
-		log:     mgr.log.With("session", id),
-		client:  client,
-		auth:    events.AuthSnapshot{State: "connecting"},
-		bridges: map[string]*Bridge{},
+		id:        id,
+		name:      name,
+		mgr:       mgr,
+		log:       mgr.log.With("session", id),
+		client:    client,
+		auth:      events.AuthSnapshot{State: "connecting"},
+		bridges:   map[string]*Bridge{},
+		recorders: map[string]*media.WavRecorder{},
 	}
 	s.calls = call.NewClient(wa.NewSocket(client), s.log, s.makeExtensions, mgr.maxCalls, s.wireCall, mgr.newObserver)
 	client.AddEventHandler(s.handleEvent)
@@ -61,6 +68,9 @@ func (s *Session) makeExtensions() []engine.Extension {
 	} else {
 		s.log.Warn("MLow codec unavailable; call runs without audio", "err", err)
 	}
+	// The video extension runs no codec (WebCodecs does that in the browser); it
+	// stays dormant on audio-only calls, so it is always safe to register.
+	exts = append(exts, video.New())
 	return exts
 }
 
@@ -76,7 +86,7 @@ func (s *Session) wireCall(callID string, cm *call.CallManager) {
 			PeerName: peerName, PeerPhotoURL: photoURL,
 			StartedAt: time.Now().UnixMilli(), Status: events.StatusRinging,
 		})
-		s.mgr.broker.EmitIncoming(s.id, c.CallID, peer, peerName, photoURL)
+		s.mgr.broker.EmitIncoming(s.id, c.CallID, peer, peerName, photoURL, c.MediaType == core.CallMediaTypeVideo)
 		s.mgr.tracer.StartCall(c.CallID, telemetry.CallAttrs{Session: s.id, Peer: c.PeerJid, Direction: "inbound"})
 		go s.fetchPeerPhoto(pj, c.CallID)
 	}
@@ -120,6 +130,17 @@ func (s *Session) wireCall(callID string, cm *call.CallManager) {
 		if b := s.getBridge(callID); b != nil {
 			_ = b.WritePCM(pcm16)
 		}
+		if rec := s.getRecorder(callID); rec != nil {
+			rec.WritePeer(pcm16)
+		}
+	}
+	cm.OnPeerVideo = func(annexb []byte, ts90 uint32, keyframe bool) {
+		if b := s.getBridge(callID); b != nil {
+			_ = b.WriteVideo(annexb, ts90, keyframe)
+		}
+	}
+	cm.OnPeerVideoState = func(state int) {
+		s.mgr.broker.EmitVideoState(s.id, callID, state)
 	}
 	cm.OnQuality = func(callID string, q core.CallQuality) {
 		s.mgr.broker.EmitCallQuality(s.id, callID, q)
@@ -155,6 +176,14 @@ func (s *Session) handleEvent(rawEvt any) {
 		s.calls.HandleTerminate(wrapCall(evt.From, evt.Data))
 	case *waevents.CallReject:
 		s.calls.HandleTerminate(wrapCall(evt.From, evt.Data))
+	case *waevents.UnknownCallEvent:
+		// whatsmeow has no dedicated mid-call video event; a <call><video state=N>
+		// renegotiation stanza arrives here (its handleCallEvent default: branch).
+		// Route it only when it actually carries a <video> child.
+		if evt.Node != nil && signaling.ParseVideoState(evt.Node).Found {
+			from, _ := types.ParseJID(wanode.AttrString(evt.Node.Attrs, "from"))
+			s.calls.HandleVideoState(ctx, evt.Node, from)
+		}
 	}
 }
 
@@ -235,6 +264,7 @@ func (s *Session) setBridge(callID string, b *Bridge) {
 }
 
 func (s *Session) removeCall(callID string) {
+	_ = s.StopRecording(callID)
 	s.bridgeMu.Lock()
 	b := s.bridges[callID]
 	delete(s.bridges, callID)
@@ -243,6 +273,45 @@ func (s *Session) removeCall(callID string) {
 		b.Close()
 	}
 	s.calls.Remove(callID)
+}
+
+func (s *Session) StartRecording(callID string) error {
+	s.recMu.Lock()
+	defer s.recMu.Unlock()
+	if s.recorders[callID] != nil {
+		return nil
+	}
+	dir := s.mgr.cfg.RecordingsDir
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	path := filepath.Join(dir, callID+".wav")
+	rec, err := media.NewWavRecorder(path)
+	if err != nil {
+		return err
+	}
+	s.recorders[callID] = rec
+	s.mgr.broker.EmitRecordState(s.id, callID, true)
+	return nil
+}
+
+func (s *Session) StopRecording(callID string) error {
+	s.recMu.Lock()
+	rec := s.recorders[callID]
+	delete(s.recorders, callID)
+	s.recMu.Unlock()
+	if rec != nil {
+		err := rec.Close()
+		s.mgr.broker.EmitRecordState(s.id, callID, false)
+		return err
+	}
+	return nil
+}
+
+func (s *Session) getRecorder(callID string) *media.WavRecorder {
+	s.recMu.Lock()
+	defer s.recMu.Unlock()
+	return s.recorders[callID]
 }
 
 func (s *Session) terminateCall(callID string, reason core.EndCallReason) {
