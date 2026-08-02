@@ -106,6 +106,7 @@ func NewServer(ctx context.Context, cfg config.Config, obsFactory func(string) c
 		Ctx: ctx, Container: bundle.Container, WebRTCAPI: api, Broker: broker,
 		Store: bundle.Sessions, WALogger: waLogger, Log: log, MaxCalls: cfg.MaxCalls,
 		NewObserver: obsFactory, Tracer: tracer, Photos: bundle.Photos,
+		DataDir: cfg.DataDir, RecordingsDir: cfg.RecordingsDir,
 	})
 	broker.SnapshotFn = mgr.SnapshotEvents
 

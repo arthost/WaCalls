@@ -20,17 +20,19 @@ import (
 )
 
 type Manager struct {
-	appCtx      context.Context
-	container   *sqlstore.Container
-	webrtcAPI   *webrtc.API
-	broker      *events.Broker
-	store       core.SessionStore
-	waLogger    waLog.Logger
-	log         *slog.Logger
-	maxCalls    int
-	newObserver func(string) core.CallObserver
-	tracer      telemetry.CallTracer
-	photos      core.ContactPhotoStore
+	appCtx        context.Context
+	container     *sqlstore.Container
+	webrtcAPI     *webrtc.API
+	broker        *events.Broker
+	store         core.SessionStore
+	waLogger      waLog.Logger
+	log           *slog.Logger
+	maxCalls      int
+	newObserver   func(string) core.CallObserver
+	tracer        telemetry.CallTracer
+	photos        core.ContactPhotoStore
+	DataDir       string
+	RecordingsDir string
 
 	mu       sync.RWMutex
 	sessions map[string]*Session
@@ -44,17 +46,19 @@ func newSessionID() string {
 }
 
 type Deps struct {
-	Ctx         context.Context
-	Container   *sqlstore.Container
-	WebRTCAPI   *webrtc.API
-	Broker      *events.Broker
-	Store       core.SessionStore
-	WALogger    waLog.Logger
-	Log         *slog.Logger
-	MaxCalls    int
-	NewObserver func(string) core.CallObserver
-	Tracer      telemetry.CallTracer
-	Photos      core.ContactPhotoStore
+	Ctx           context.Context
+	Container     *sqlstore.Container
+	WebRTCAPI     *webrtc.API
+	Broker        *events.Broker
+	Store         core.SessionStore
+	WALogger      waLog.Logger
+	Log           *slog.Logger
+	MaxCalls      int
+	NewObserver   func(string) core.CallObserver
+	Tracer        telemetry.CallTracer
+	Photos        core.ContactPhotoStore
+	DataDir       string
+	RecordingsDir string
 }
 
 func NewManager(d Deps) *Manager {
@@ -65,18 +69,20 @@ func NewManager(d Deps) *Manager {
 		d.Tracer = telemetry.NopTracer()
 	}
 	return &Manager{
-		appCtx:      d.Ctx,
-		container:   d.Container,
-		webrtcAPI:   d.WebRTCAPI,
-		broker:      d.Broker,
-		store:       d.Store,
-		waLogger:    d.WALogger,
-		log:         d.Log,
-		maxCalls:    d.MaxCalls,
-		newObserver: d.NewObserver,
-		tracer:      d.Tracer,
-		photos:      d.Photos,
-		sessions:    map[string]*Session{},
+		appCtx:        d.Ctx,
+		container:     d.Container,
+		webrtcAPI:     d.WebRTCAPI,
+		broker:        d.Broker,
+		store:         d.Store,
+		waLogger:      d.WALogger,
+		log:           d.Log,
+		maxCalls:      d.MaxCalls,
+		newObserver:   d.NewObserver,
+		tracer:        d.Tracer,
+		photos:        d.Photos,
+		DataDir:       d.DataDir,
+		RecordingsDir: d.RecordingsDir,
+		sessions:      map[string]*Session{},
 	}
 }
 

@@ -11,7 +11,6 @@ import (
 	"wacalls/internal/app/assets"
 	"wacalls/internal/voip/call"
 	"wacalls/internal/voip/core"
-	"wacalls/internal/voip/media"
 
 	"go.mau.fi/whatsmeow/types"
 )
