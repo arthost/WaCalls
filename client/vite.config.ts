@@ -9,7 +9,9 @@ export default defineConfig({
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
   },
   server: {
+    host: true,
     port: 5173,
+    allowedHosts: ['crmlocal.duology.com.br', '.duology.com.br', 'localhost', '127.0.0.1'],
     proxy: {
       "/api": {
         target: "http://localhost:3001",
