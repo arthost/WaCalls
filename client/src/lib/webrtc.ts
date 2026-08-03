@@ -16,7 +16,9 @@ export type OpenCall = {
   // startVideo opens the local camera and begins sending H.264; returns the
   // self-view stream (or null if the camera/WebCodecs is unavailable).
   startVideo: () => Promise<MediaStream | null>;
-  // stopVideo tears the camera down but keeps receiving the peer's video.
+  // startScreenShare captures the screen and encodes H.264 over the video channel.
+  startScreenShare: () => Promise<MediaStream | null>;
+  // stopVideo tears the camera/screen down but keeps receiving the peer's video.
   stopVideo: () => void;
   close: () => void;
 };
@@ -72,6 +74,12 @@ export const openCall = async (
     startVideo: async () => {
       if (!videoChannel) return null;
       const stream = await videoChannel.startCapture();
+      videoActive = stream !== null;
+      return stream;
+    },
+    startScreenShare: async () => {
+      if (!videoChannel) return null;
+      const stream = await videoChannel.startScreenShare();
       videoActive = stream !== null;
       return stream;
     },

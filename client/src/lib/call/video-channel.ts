@@ -16,7 +16,9 @@ export type VideoChannel = {
   // startCapture opens the camera + encoder and begins sending framed Annex-B.
   // Returns the local MediaStream (for a self-view) or null if unavailable.
   startCapture: () => Promise<MediaStream | null>;
-  // stopCapture tears the camera + encoder down but keeps the channel and the
+  // startScreenShare captures the screen + encoder and sends framed Annex-B.
+  startScreenShare: () => Promise<MediaStream | null>;
+  // stopCapture tears the camera/screen + encoder down but keeps the channel and the
   // inbound decode path alive, so we can still receive the peer's video.
   stopCapture: () => void;
   close: () => void;
@@ -177,6 +179,79 @@ export const setupVideoChannel = (
     return localStream;
   };
 
+  const startScreenShare = async (): Promise<MediaStream | null> => {
+    stopCapture();
+    try {
+      localStream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          width: { ideal: VIDEO_WIDTH },
+          height: { ideal: VIDEO_HEIGHT },
+          frameRate: { ideal: VIDEO_FPS },
+        },
+        audio: false,
+      });
+    } catch (err) {
+      console.warn("screen capture unavailable or cancelled", err);
+      return null;
+    }
+
+    const [track] = localStream.getVideoTracks();
+    if (track) {
+      track.onended = () => {
+        stopCapture();
+      };
+    }
+
+    const processor = new MediaStreamTrackProcessor({ track });
+    reader = processor.readable.getReader();
+
+    encoder = new VideoEncoder({
+      output: (chunk) => {
+        if (dc.readyState !== "open") return;
+        const data = new Uint8Array(chunk.byteLength);
+        chunk.copyTo(data);
+        const msg = new Uint8Array(HEADER_LEN + data.byteLength);
+        new DataView(msg.buffer).setUint32(0, usToTs90(chunk.timestamp), false);
+        msg[4] = chunk.type === "key" ? 1 : 0;
+        msg.set(data, HEADER_LEN);
+        try {
+          dc.send(msg);
+        } catch {}
+      },
+      error: (e) => console.warn("screen video encoder error", e),
+    });
+    encoder.configure({
+      codec: "avc1.42e01f",
+      width: VIDEO_WIDTH,
+      height: VIDEO_HEIGHT,
+      bitrate: VIDEO_BITRATE,
+      framerate: VIDEO_FPS,
+      latencyMode: "realtime",
+      avc: { format: "annexb" },
+    } as VideoEncoderConfig);
+
+    capturing = true;
+    let frameCount = 0;
+    const pump = async () => {
+      while (capturing && reader) {
+        const { value: frame, done } = await reader.read();
+        if (done || !frame) break;
+        if (
+          encoder &&
+          encoder.state === "configured" &&
+          encoder.encodeQueueSize < 2
+        ) {
+          const keyFrame = frameCount % (VIDEO_FPS * 2) === 0;
+          encoder.encode(frame, { keyFrame });
+          frameCount++;
+        }
+        frame.close();
+      }
+    };
+    pump().catch((err) => console.warn("screen capture pump ended", err));
+    return localStream;
+  };
+
   const stopCapture = () => {
     capturing = false;
     try {
@@ -199,6 +274,7 @@ export const setupVideoChannel = (
       return localStream;
     },
     startCapture,
+    startScreenShare,
     stopCapture,
     close: () => {
       stopCapture();
