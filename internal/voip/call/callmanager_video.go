@@ -16,10 +16,25 @@ import (
 // current call. Video uses the same JIDs as audio but counter 2 in the HKDF, so
 // both sides derive matching SSRCs deterministically. Must hold m.mu.
 func (m *CallManager) deriveVideoSsrcsLocked(callID, selfDeviceJid, peerDeviceJid string) {
+	if selfDeviceJid == "" {
+		selfDeviceJid = m.ownDeviceJid
+	}
+	if selfDeviceJid == "" {
+		selfDeviceJid = ensureDeviceJid(m.ownCredJid())
+	}
+	if peerDeviceJid == "" {
+		peerDeviceJid = m.peerDeviceJid
+	}
+	if peerDeviceJid == "" && m.acceptedByJid != "" {
+		peerDeviceJid = ensureDeviceJid(m.acceptedByJid)
+	}
+
 	if selfDeviceJid != "" {
+		m.ownDeviceJid = selfDeviceJid
 		m.videoSelfSsrc = media.GenerateSecureSsrc(callID, selfDeviceJid, 2)
 	}
 	if peerDeviceJid != "" {
+		m.peerDeviceJid = peerDeviceJid
 		m.videoPeerSsrc = media.GenerateSecureSsrc(callID, peerDeviceJid, 2)
 	}
 	if m.videoSelfSsrc != 0 {
@@ -65,6 +80,7 @@ func (m *CallManager) streamSsrcsLocked() (selfSsrcs, peerSsrcs []uint32) {
 func (m *CallManager) applyStreamSsrcsLocked() {
 	selfSsrcs, peerSsrcs := m.streamSsrcsLocked()
 	m.relay.SetStreamSsrcs(selfSsrcs, peerSsrcs)
+	m.relay.ResendSubscriptions()
 }
 
 // sendVideoFrame packetizes one Annex-B access unit into RTP (PT 97) on the
@@ -191,10 +207,10 @@ func (m *CallManager) HandleVideoState(ctx context.Context, node *waBinary.Node)
 		fireState = -1
 	)
 	switch parsed.State {
-	case signaling.VideoStateUpgradeRequest, signaling.VideoStateUpgradeReqV2, signaling.VideoStateEnabled:
-		// Peer turned its camera on. Make sure the relay forwards its video
+	case signaling.VideoStateEnabled, 2, signaling.VideoStateUpgradeRequest, signaling.VideoStateUpgradeReqV2:
+		// Peer turned its camera on or sent state=1/2/3. Make sure the relay forwards its video
 		// stream, then accept the upgrade so the peer keeps sending.
-		if m.videoPeerSsrc == 0 {
+		if m.videoPeerSsrc == 0 || m.videoSelfSsrc == 0 {
 			m.deriveVideoSsrcsLocked(callID, m.ownDeviceJid, m.peerDeviceJid)
 		}
 		m.applyStreamSsrcsLocked()
@@ -208,6 +224,11 @@ func (m *CallManager) HandleVideoState(ctx context.Context, node *waBinary.Node)
 	case signaling.VideoStateUpgradeAccept:
 		// Our upgrade request was accepted; frames are already gated on the relay
 		// connection, so nothing more to send. Surface it for the UI.
+		if m.videoPeerSsrc == 0 || m.videoSelfSsrc == 0 {
+			m.deriveVideoSsrcsLocked(callID, m.ownDeviceJid, m.peerDeviceJid)
+		}
+		m.applyStreamSsrcsLocked()
+		call.MediaType = core.CallMediaTypeVideo
 		fireState = signaling.VideoStateEnabled
 	case signaling.VideoStateStopped, signaling.VideoStateDisabled:
 		fireState = signaling.VideoStateDisabled
