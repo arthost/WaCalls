@@ -22,10 +22,17 @@ export const endCall = (sid: string, callId: string) =>
   apiDelete(`/api/sessions/${sid}/calls/${callId}`);
 
 export const enableVideo = (sid: string, callId: string) =>
-  apiPost<{ status: string }>(
-    `/api/sessions/${sid}/calls/${callId}/video`,
-    {},
-  );
+  apiPost<{ status: string }>(`/api/sessions/${sid}/calls/${callId}/video`, {
+    action: "enable",
+  });
+
+// disableVideo avisa o par que paramos de enviar vídeo (<video state=6>), para a UI
+// dele soltar nosso tile em vez de congelar no último frame decodificado. Só a direção
+// de saída para: o par pode continuar enviando.
+export const disableVideo = (sid: string, callId: string) =>
+  apiPost<{ status: string }>(`/api/sessions/${sid}/calls/${callId}/video`, {
+    action: "stop",
+  });
 
 export const holdCall = (sid: string, callId: string) =>
   apiPost<{ status: string }>(`/api/sessions/${sid}/calls/${callId}/hold`, {

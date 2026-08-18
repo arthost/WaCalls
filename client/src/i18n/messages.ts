@@ -36,6 +36,7 @@ export type Messages = {
     status: {
       open: string;
       qr: string;
+      pair_code: string;
       connecting: string;
       logged_out: string;
     };
@@ -45,6 +46,15 @@ export type Messages = {
     description: string;
     disconnectedBadge: string;
     waitingQr: string;
+    usePhoneCode: string;
+    useQr: string;
+    phoneLabel: string;
+    phonePlaceholder: string;
+    requestCode: string;
+    requestingCode: string;
+    codeTitle: string;
+    codeDescription: string;
+    codeFailed: string;
   };
   calls: {
     activeLabel: (n: number) => string;
@@ -99,6 +109,8 @@ export type Messages = {
     emptyDescription: string;
     loadMore: string;
     loading: string;
+    downloadRecording: string;
+    recordingPending: string;
   };
   incoming: {
     title: string;

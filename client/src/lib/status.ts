@@ -14,6 +14,7 @@ const callTones: Record<CallStatus, StatusTone> = {
 const sessionTones: Record<SessionState, StatusTone> = {
   open: "ok",
   qr: "neutral",
+  pair_code: "neutral",
   connecting: "neutral",
   logged_out: "danger",
 };

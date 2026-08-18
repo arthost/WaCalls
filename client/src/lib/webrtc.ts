@@ -3,7 +3,9 @@ import { setupAudioChannel } from "./call/audio-channel";
 import { setupVideoChannel, type VideoChannel } from "./call/video-channel";
 
 export type OpenCall = {
-  pc: RTCPeerConnection;
+  // null on the WebSocket transport, which has no peer connection. Nothing in the UI
+  // reads it; it is kept for debugging the WebRTC path from the console.
+  pc: RTCPeerConnection | null;
   micStream: MediaStream;
   remoteStream: MediaStream | null;
   // Decoded peer video — always present when WebCodecs is available, since the
@@ -29,10 +31,22 @@ export const openCall = async (
   micDeviceId: string | null,
   video = false,
 ): Promise<OpenCall> => {
-  const localStream = await navigator.mediaDevices.getUserMedia({
-    audio: micDeviceId ? { deviceId: { exact: micDeviceId } } : true,
-    video: false,
-  });
+  let localStream: MediaStream;
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({
+      audio: micDeviceId ? { deviceId: { exact: micDeviceId } } : true,
+      video: false,
+    });
+  } catch (err) {
+    if (micDeviceId) {
+      localStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: false,
+      });
+    } else {
+      throw err;
+    }
+  }
 
   const pc = new RTCPeerConnection({ iceServers: [] });
   const audio = await setupAudioChannel(pc, localStream);

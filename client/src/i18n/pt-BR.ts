@@ -39,6 +39,7 @@ export const ptBR: Messages = {
     status: {
       open: "Conectado",
       qr: "Ler QR",
+      pair_code: "Digitar código",
       connecting: "Conectando…",
       logged_out: "Desconectado",
     },
@@ -49,6 +50,16 @@ export const ptBR: Messages = {
       "Abra o WhatsApp → Aparelhos conectados → Conectar um aparelho e escaneie.",
     disconnectedBadge: "Desconectado. Use Reativar acima para obter um QR",
     waitingQr: "Aguardando QR…",
+    usePhoneCode: "Conectar com número de telefone",
+    useQr: "Usar QR code",
+    phoneLabel: "Número com código do país",
+    phonePlaceholder: "5511987654321",
+    requestCode: "Obter código",
+    requestingCode: "Obtendo código…",
+    codeTitle: "Digite este código no aparelho",
+    codeDescription:
+      "No WhatsApp: Aparelhos conectados → Conectar um aparelho → Conectar com número de telefone.",
+    codeFailed: "Não foi possível obter o código. Confira o número e tente de novo.",
   },
   calls: {
     activeLabel: (n) =>
@@ -105,6 +116,8 @@ export const ptBR: Messages = {
     emptyDescription: "As chamadas que você fizer ou receber aparecerão aqui.",
     loadMore: "Carregar mais",
     loading: "Carregando…",
+    downloadRecording: "Baixar gravação",
+    recordingPending: "Gravação em andamento; disponível ao fim da chamada",
   },
   incoming: {
     title: "Chamada recebida",

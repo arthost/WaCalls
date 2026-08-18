@@ -1,3 +1,4 @@
+import { prefixPath } from "@/lib/api";
 import { float32ToInt16LE, int16LEToFloat32 } from "@/lib/pcm";
 import {
   CAPTURE_PROCESSOR_NAME,
@@ -21,8 +22,10 @@ export const setupAudioChannel = async (
   dc.binaryType = "arraybuffer";
 
   const ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
-  await ctx.audioWorklet.addModule(CAPTURE_WORKLET_URL);
-  await ctx.audioWorklet.addModule(PLAYBACK_WORKLET_URL);
+  // prefixPath: servido atrás do gateway, o app vive sob /api/v1/calls e a URL
+  // absoluta do worklet cairia em 404.
+  await ctx.audioWorklet.addModule(prefixPath(CAPTURE_WORKLET_URL));
+  await ctx.audioWorklet.addModule(prefixPath(PLAYBACK_WORKLET_URL));
   await ctx.resume();
 
   const micSource = ctx.createMediaStreamSource(micStream);

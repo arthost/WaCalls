@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Download, History } from "lucide-react";
+import { Download, History, Mic } from "lucide-react";
 import { toast } from "sonner";
 import {
   Sheet,
@@ -14,7 +14,9 @@ import { Separator } from "@/components/ui/separator";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { PeerAvatar } from "@/components/domain/contacts/PeerAvatar";
 import { useHistory } from "@/hooks/useHistory";
+import { useRecordings } from "@/hooks/useRecordings";
 import { exportHistoryCsv } from "@/services/history";
+import { downloadRecording } from "@/services/recordings";
 import { useT } from "@/hooks/useT";
 import { useLocale } from "@/stores/locale";
 
@@ -27,6 +29,7 @@ export const HistoryDrawer = ({ sid }: { sid: string }) => {
     sid,
     open,
   );
+  const { byCallId: recordings } = useRecordings(open);
   const rows = data?.pages.flatMap((p) => p.calls) ?? [];
 
   const onExport = async () => {
@@ -37,6 +40,14 @@ export const HistoryDrawer = ({ sid }: { sid: string }) => {
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
       setExporting(false);
+    }
+  };
+
+  const onDownloadRecording = async (callId: string) => {
+    try {
+      await downloadRecording(callId);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -73,28 +84,54 @@ export const HistoryDrawer = ({ sid }: { sid: string }) => {
           ) : (
             <>
               <ul className="space-y-2">
-                {rows.map((r) => (
-                  <li
-                    key={r.callId}
-                    className="flex items-center gap-3 rounded-lg border p-3"
-                  >
-                    <PeerAvatar
-                      name={r.peerName || r.peer}
-                      photoUrl={r.peerPhotoUrl}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate font-medium">
-                        {r.peerName || r.peer}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {t.calls.direction[r.direction]} ·{" "}
-                        <span className="font-mono">
-                          {new Date(r.startedAt).toLocaleString(locale)}
-                        </span>
-                      </p>
-                    </div>
-                  </li>
-                ))}
+                {rows.map((r) => {
+                  const rec = recordings.get(r.callId);
+                  return (
+                    <li
+                      key={r.callId}
+                      className="flex items-center gap-3 rounded-lg border p-3"
+                    >
+                      <PeerAvatar
+                        name={r.peerName || r.peer}
+                        photoUrl={r.peerPhotoUrl}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-medium">
+                          {r.peerName || r.peer}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {t.calls.direction[r.direction]} ·{" "}
+                          <span className="font-mono">
+                            {new Date(r.startedAt).toLocaleString(locale)}
+                          </span>
+                        </p>
+                      </div>
+                      {/* A recording that is still open has a zero length in its WAV
+                          header, so offering it would hand out a file that plays as
+                          empty — show it as pending instead. */}
+                      {rec && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          disabled={rec.active}
+                          title={
+                            rec.active
+                              ? t.history.recordingPending
+                              : t.history.downloadRecording
+                          }
+                          aria-label={
+                            rec.active
+                              ? t.history.recordingPending
+                              : t.history.downloadRecording
+                          }
+                          onClick={() => void onDownloadRecording(r.callId)}
+                        >
+                          <Mic className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
               {hasNextPage && (
                 <Button

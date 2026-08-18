@@ -14,6 +14,15 @@ export const prefixPath = (path: string): string => {
   return path;
 };
 
+// wsUrl converte um caminho da API em uma URL WebSocket absoluta na mesma origem.
+// Mesma origem importa: é o que permite ao cookie de sessão (SameSite=Strict)
+// acompanhar o handshake — o WebSocket não aceita headers, então sem o cookie a
+// única alternativa seria expor a API key na query string.
+export const wsUrl = (path: string): string => {
+  const scheme = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${scheme}//${window.location.host}${prefixPath(path)}`;
+};
+
 const baseHeaders = (): HeadersInit => ({
   "X-Client-Id": getClientId(),
   "Content-Type": "application/json",

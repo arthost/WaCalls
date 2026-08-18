@@ -12,6 +12,7 @@ import type { SessionInfo, SessionState } from "@/types/session";
 const dotClass: Record<SessionState, string> = {
   open: "bg-primary",
   qr: "bg-amber-500",
+  pair_code: "bg-amber-500",
   connecting: "bg-muted-foreground/50",
   logged_out: "bg-destructive",
 };

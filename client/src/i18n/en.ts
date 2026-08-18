@@ -39,6 +39,7 @@ export const en: Messages = {
     status: {
       open: "Connected",
       qr: "Scan QR",
+      pair_code: "Enter code",
       connecting: "Connecting…",
       logged_out: "Disconnected",
     },
@@ -48,6 +49,16 @@ export const en: Messages = {
     description: "Open WhatsApp → Linked devices → Link a device, then scan.",
     disconnectedBadge: "Disconnected. Use Reactivate above to get a QR",
     waitingQr: "Waiting for QR…",
+    usePhoneCode: "Link with phone number instead",
+    useQr: "Use QR code",
+    phoneLabel: "Number with country code",
+    phonePlaceholder: "15551234567",
+    requestCode: "Get code",
+    requestingCode: "Getting code…",
+    codeTitle: "Enter this code on the phone",
+    codeDescription:
+      "In WhatsApp: Linked devices → Link a device → Link with phone number instead.",
+    codeFailed: "Could not get a code. Check the number and try again.",
   },
   calls: {
     activeLabel: (n) => `active call${n === 1 ? "" : "s"}`,
@@ -103,6 +114,8 @@ export const en: Messages = {
     emptyDescription: "Calls you make or receive will appear here.",
     loadMore: "Load more",
     loading: "Loading…",
+    downloadRecording: "Download recording",
+    recordingPending: "Recording in progress; available when the call ends",
   },
   incoming: {
     title: "Incoming call",

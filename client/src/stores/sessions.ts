@@ -63,11 +63,13 @@ export const ensureSessionsWired = (): void => {
       useSessions.setState((s) => {
         const sessions = s.sessions.map((x) =>
           x.id === ev.sessionId
-            ? { ...x, state: ev.state, paired: ev.paired }
+            ? { ...x, state: ev.state, paired: ev.paired, code: ev.code }
             : x,
         );
         const qrs = { ...s.qrs };
-        if (ev.paired) delete qrs[ev.sessionId];
+        // O código e o QR são excludentes: com um código em voo, um QR tardio da
+        // mesma conexão trocaria na tela o que o operador já recusou.
+        if (ev.paired || ev.code) delete qrs[ev.sessionId];
         else if (ev.qr) qrs[ev.sessionId] = ev.qr;
         return { sessions, qrs };
       });

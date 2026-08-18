@@ -1,5 +1,9 @@
 export const SAMPLE_RATE = 16000;
 export const PCM_CHANNEL_LABEL = "pcm";
+// Subprotocol for the WebSocket audio transport (the WebRTC fallback). It names the
+// wire format the server expects: raw Int16 LE PCM at SAMPLE_RATE, mono, one binary
+// message per frame — the same currency PCM_CHANNEL_LABEL carries.
+export const WS_AUDIO_SUBPROTOCOL = "pcm16";
 export const CAPTURE_WORKLET_URL = "/worklets/capture-processor.js";
 export const PLAYBACK_WORKLET_URL = "/worklets/playback-processor.js";
 export const CAPTURE_PROCESSOR_NAME = "capture-processor";

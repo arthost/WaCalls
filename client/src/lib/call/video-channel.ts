@@ -69,8 +69,10 @@ export const setupVideoChannel = (
     if (decoder) return decoder;
     decoder = new VideoDecoder({
       output: (frame) => {
-        writer.write(frame).catch(() => {});
-        frame.close();
+        writer
+          .write(frame)
+          .catch(() => {})
+          .finally(() => frame.close());
       },
       error: (e) => console.warn("video decoder error", e),
     });
@@ -121,9 +123,16 @@ export const setupVideoChannel = (
         },
         audio: false,
       });
-    } catch (err) {
-      console.warn("camera unavailable; video disabled", err);
-      return null;
+    } catch {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: false,
+        });
+      } catch (err) {
+        console.warn("camera unavailable; video disabled", err);
+        return null;
+      }
     }
 
     const [track] = localStream.getVideoTracks();

@@ -24,6 +24,7 @@ export type BrokerEvent =
       paired: boolean;
       state: SessionState;
       qr?: string;
+      code?: string;
     }
   | { type: "call-list"; calls: CallListRow[] }
   | {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { Check, PhoneOff, Video, VideoOff, WifiOff, Pause, Play, Disc, Forward } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -9,7 +10,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { attachMeter } from "@/lib/audio-meter";
-import { enableVideo, holdCall, resumeCall, transferCall, setRecording } from "@/services/calls";
+import { enableVideo, disableVideo, holdCall, resumeCall, transferCall, setRecording } from "@/services/calls";
 import { useCalls } from "@/stores/calls";
 import { useDevices } from "@/stores/devices";
 import { useEndCall } from "@/hooks/useEndCall";
@@ -269,11 +270,17 @@ export const CallCard = ({ call }: { call: CallSummary }) => {
     if (conn.videoActive) {
       conn.stopVideo();
       setCameraOn(false);
+      // Sinaliza o desligamento: sem isto o par fica com nosso último frame
+      // congelado na tela, indistinguível de uma conexão travada.
+      await disableVideo(call.sessionId, call.callId).catch(() => {});
     } else {
       // Signal the WhatsApp leg first so the peer accepts the upgrade, then open
       // the local camera and start pushing H.264 over the datachannel.
       await enableVideo(call.sessionId, call.callId).catch(() => {});
       const stream = await conn.startVideo();
+      if (!stream) {
+        toast.error("Não foi possível acessar a câmera do dispositivo.");
+      }
       setCameraOn(stream !== null);
     }
   };
@@ -317,7 +324,11 @@ export const CallCard = ({ call }: { call: CallSummary }) => {
     }
     if (remoteVideoRef.current && conn.remoteVideoStream) {
       remoteVideoRef.current.srcObject = conn.remoteVideoStream;
-      remoteVideoRef.current.play().catch(() => {});
+      remoteVideoRef.current.play().catch((err) => {
+        if (err.name !== "AbortError") {
+          console.warn("remote video play error", err);
+        }
+      });
     }
   }, [conn, cameraOn, peerVideoActive, hasVideo]);
 
