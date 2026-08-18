@@ -263,6 +263,9 @@ func (m *CallManager) cleanupMedia() {
 	m.rtpPacketsSent = 0
 	m.rtpOctetsSent = 0
 	m.lastRtpTs = 0
+	m.videoRtpPacketsSent = 0
+	m.videoRtpOctetsSent = 0
+	m.lastVideoRtpTs = 0
 	m.mu.Unlock()
 
 	if drops := m.srtpDrops.snapshotAndReset(); len(drops) > 0 {

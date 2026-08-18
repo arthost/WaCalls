@@ -16,7 +16,11 @@ var (
 	capabilityPreaccept = []byte{0x01, 0x05, 0xf7, 0x09, 0xe4, 0xbb, 0x07}
 )
 
-func BuildOfferStanza(ctx context.Context, sock core.VoipSocket, callID string, callKey []byte, peerJid types.JID, video bool) (waBinary.Node, error) {
+// BuildOfferStanza builds the outgoing call offer. It also returns the callee's
+// full device list as resolved by USync, because the caller is the only party
+// that knows every device it rang: once one of them answers, the caller has to
+// tell the others to stop ringing (see BuildTerminateElsewhereStanza).
+func BuildOfferStanza(ctx context.Context, sock core.VoipSocket, callID string, callKey []byte, peerJid types.JID, video bool) (waBinary.Node, []types.JID, error) {
 	creator := sock.OwnLID()
 	if creator.IsEmpty() {
 		creator = sock.OwnPN()
@@ -24,15 +28,15 @@ func BuildOfferStanza(ctx context.Context, sock core.VoipSocket, callID string, 
 
 	rawDevices, err := sock.GetUSyncDevices(ctx, []types.JID{peerJid})
 	if err != nil {
-		return waBinary.Node{}, fmt.Errorf("usync devices: %w", err)
+		return waBinary.Node{}, nil, fmt.Errorf("usync devices: %w", err)
 	}
 	if err := sock.AssertSessions(ctx, rawDevices, false); err != nil {
-		return waBinary.Node{}, fmt.Errorf("assert sessions: %w", err)
+		return waBinary.Node{}, nil, fmt.Errorf("assert sessions: %w", err)
 	}
 
 	destinations, includeDeviceIdentity, err := sock.CreateParticipantNodes(ctx, rawDevices, callKey, waBinary.Attrs{"count": "0"})
 	if err != nil {
-		return waBinary.Node{}, fmt.Errorf("participant nodes: %w", err)
+		return waBinary.Node{}, nil, fmt.Errorf("participant nodes: %w", err)
 	}
 
 	var offerContent []waBinary.Node
@@ -72,7 +76,7 @@ func BuildOfferStanza(ctx context.Context, sock core.VoipSocket, callID string, 
 			Attrs:   waBinary.Attrs{"call-id": callID, "call-creator": creator},
 			Content: offerContent,
 		}},
-	}, nil
+	}, rawDevices, nil
 }
 
 func BuildAcceptStanza(ctx context.Context, sock core.VoipSocket, callID string, callKey []byte, peerJid, callCreator types.JID, video bool) (waBinary.Node, error) {
@@ -135,6 +139,23 @@ func BuildTerminateStanza(peerJid types.JID, callID string, callCreator types.JI
 	return callWrap(peerJid, waBinary.Node{
 		Tag:   "terminate",
 		Attrs: waBinary.Attrs{"call-id": callID, "call-creator": callCreator},
+	})
+}
+
+// BuildTerminateElsewhereStanza tells the callee devices that did NOT answer to
+// stop ringing. When one of a multi-device callee picks up, only the caller knows
+// the full device list, so the caller has to fan this out — otherwise the other
+// devices keep ringing until they time out, and the late reject one of them then
+// sends would tear down the already-active call.
+func BuildTerminateElsewhereStanza(peerJid types.JID, callID string, callCreator types.JID, devices []types.JID) waBinary.Node {
+	tos := make([]waBinary.Node, len(devices))
+	for i, jid := range devices {
+		tos[i] = waBinary.Node{Tag: "to", Attrs: waBinary.Attrs{"jid": jid}}
+	}
+	return callWrap(peerJid, waBinary.Node{
+		Tag:     "terminate",
+		Attrs:   waBinary.Attrs{"call-id": callID, "call-creator": callCreator, "reason": "accepted_elsewhere"},
+		Content: []waBinary.Node{{Tag: "destination", Content: tos}},
 	})
 }
 

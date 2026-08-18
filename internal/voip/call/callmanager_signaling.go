@@ -95,6 +95,16 @@ func (m *CallManager) HandleCallOffer(ctx context.Context, node *waBinary.Node, 
 func (m *CallManager) HandleCallAccept(ctx context.Context, node *waBinary.Node, peerJid types.JID) {
 	m.mu.Lock()
 	call := m.currentCall
+	// First accept wins: a later accept from a DIFFERENT device (a sibling that also
+	// picked up, or one racing our accepted_elsewhere fan-out) must not move
+	// acceptedByJid or rekey SRTP against media that is already flowing. A retry from
+	// the SAME device is allowed through: the first accept may have carried a call key
+	// we could not decrypt, and the retransmission is the only chance to repair it.
+	if accepted := m.acceptedByJid; accepted != "" && accepted != peerJid.String() {
+		m.mu.Unlock()
+		m.log.Info("accept from another device ignored", "accepted_by", accepted, "from", peerJid.String())
+		return
+	}
 	m.mu.Unlock()
 	if call == nil {
 		return
@@ -127,19 +137,32 @@ func (m *CallManager) HandleCallAccept(ctx context.Context, node *waBinary.Node,
 	}
 	_ = call.ApplyTransition(Transition{Type: TransitionRemoteAccepted})
 	m.emitState()
+	firstAccept := m.acceptedByJid == ""
 	m.acceptedByJid = peerJid.String()
-		ourDeviceJid := ensureDeviceJid(m.ownCredJid())
-		peerDeviceJid := ensureDeviceJid(peerJid.String())
-		m.peerSsrcs = []uint32{media.GenerateSecureSsrc(call.CallID, peerDeviceJid, 0)}
-		m.rememberDeviceJidsLocked(ourDeviceJid, peerDeviceJid)
-		if call.MediaType == core.CallMediaTypeVideo {
-			m.deriveVideoSsrcsLocked(call.CallID, ourDeviceJid, peerDeviceJid)
-		}
+	ourDeviceJid := ensureDeviceJid(m.ownCredJid())
+	peerDeviceJid := ensureDeviceJid(peerJid.String())
+	m.peerSsrcs = []uint32{media.GenerateSecureSsrc(call.CallID, peerDeviceJid, 0)}
+	m.rememberDeviceJidsLocked(ourDeviceJid, peerDeviceJid)
+	if call.MediaType == core.CallMediaTypeVideo {
+		m.deriveVideoSsrcsLocked(call.CallID, ourDeviceJid, peerDeviceJid)
+	}
 	m.relay.SetSubscriptionSsrc(firstSsrc(m.peerSsrcs))
 	m.applyStreamSsrcsLocked()
 	m.initSrtpKeysLocked()
 	hasConn := m.relay.HasConnection()
 	relayData := call.RelayData
+	// Only the first accept fans out accepted_elsewhere, to the callee devices that
+	// did not answer. Recomputing it on a same-device retry would re-ring nobody but
+	// would spam the server with a redundant terminate.
+	var siblings []types.JID
+	if firstAccept {
+		for _, dev := range m.calleeDevices {
+			if dev.String() != peerJid.String() {
+				siblings = append(siblings, dev)
+			}
+		}
+	}
+	basePeer := call.PeerJid
 	m.mu.Unlock()
 
 	m.log.Info("remote accepted call", "call_id", call.CallID, "peer", peerJid.String(),
@@ -149,6 +172,15 @@ func (m *CallManager) HandleCallAccept(ctx context.Context, node *waBinary.Node,
 
 	callID := call.CallID
 	creator := wanode.MustJID(call.CallCreator)
+	if len(siblings) > 0 {
+		elsewhere := signaling.BuildTerminateElsewhereStanza(wanode.MustJID(basePeer), callID, creator, siblings)
+		if err := m.sock.SendNode(ctx, elsewhere); err != nil {
+			m.log.Warn("accepted_elsewhere fanout failed; sibling devices may keep ringing",
+				"call_id", callID, "err", err)
+		} else {
+			m.log.Info("accepted_elsewhere sent to non-answering devices", "call_id", callID, "devices", len(siblings))
+		}
+	}
 	m.sendTransportUpdate(ctx, peerJid, creator, callID)
 	_ = m.sock.SendNode(ctx, signaling.BuildMuteV2Stanza(peerJid, callID, creator, 0))
 	if acceptMsgID := wanode.AttrString(node.Attrs, "id"); acceptMsgID != "" {
@@ -374,6 +406,16 @@ func (m *CallManager) HandleCallTerminate(node *waBinary.Node) {
 	call := m.currentCall
 	if call == nil {
 		m.mu.Unlock()
+		return
+	}
+	// Once a device has answered, only that device may end the call. A sibling that
+	// kept ringing eventually times out and sends its own reject/terminate, which must
+	// not tear down the call that is already active on the answering device.
+	sender := wanode.AttrString(node.Attrs, "from")
+	if m.acceptedByJid != "" && sender != "" && sender != m.acceptedByJid && !call.IsEnded() {
+		m.mu.Unlock()
+		m.log.Info("terminate from non-answering device ignored",
+			"call_id", call.CallID, "from", sender, "accepted_by", m.acceptedByJid)
 		return
 	}
 	info := signaling.ExtractNodeInfo(node)

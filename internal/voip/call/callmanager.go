@@ -55,6 +55,7 @@ type CallManager struct {
 	outgoingPreacceptSent bool
 	observerEnded         bool
 	acceptedByJid         string
+	calleeDevices         []types.JID
 	debeEnabled           bool
 
 	timeouts      Timeouts
@@ -64,19 +65,22 @@ type CallManager struct {
 	lastRedialAt  time.Time
 	srtpDrops     srtpDropTally
 
-	sendSrtcp      *media.SrtcpContext
-	recvSrtcp      *media.SrtcpContext
-	srtcpDrops     srtpDropTally
-	recvStats      *media.RTCPReceiverStats
-	rtcpTxStop     chan struct{}
-	rtcpCName      string
-	srtcpTxIndex   uint32
-	rtpPacketsSent uint32
-	rtpOctetsSent  uint32
-	lastRtpTs      uint32
-	rtcp208Tick    time.Duration
-	rtcpSRTick     time.Duration
-	rtcp209Tick    time.Duration
+	sendSrtcp           *media.SrtcpContext
+	recvSrtcp           *media.SrtcpContext
+	srtcpDrops          srtpDropTally
+	recvStats           *media.RTCPReceiverStats
+	rtcpTxStop          chan struct{}
+	rtcpCName           string
+	srtcpTxIndex        uint32
+	rtpPacketsSent      uint32
+	rtpOctetsSent       uint32
+	lastRtpTs           uint32
+	videoRtpPacketsSent uint32
+	videoRtpOctetsSent  uint32
+	lastVideoRtpTs      uint32
+	rtcp208Tick         time.Duration
+	rtcpSRTick          time.Duration
+	rtcp209Tick         time.Duration
 
 	extensions   []engine.Extension
 	extMu        sync.Mutex
@@ -165,10 +169,14 @@ func (m *CallManager) StartCall(ctx context.Context, callID string, peerJid type
 	}
 	m.mu.Unlock()
 
-	offer, err := signaling.BuildOfferStanza(ctx, m.sock, callID, callKey, resolved, video)
+	offer, calleeDevices, err := signaling.BuildOfferStanza(ctx, m.sock, callID, callKey, resolved, video)
 	if err != nil {
 		return err
 	}
+	m.mu.Lock()
+	// Remembered so the first accept can tell the callee's other devices to stop ringing.
+	m.calleeDevices = calleeDevices
+	m.mu.Unlock()
 	ackNode, err := m.sock.Query(ctx, offer)
 	if err != nil {
 		return err

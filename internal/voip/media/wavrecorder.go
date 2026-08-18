@@ -186,22 +186,28 @@ func writeWavHeader(f *os.File, dataLen uint32) error {
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
+	h := wavHeader16kMono(dataLen)
+	if _, err := f.Write(h[:]); err != nil {
+		return err
+	}
+	return nil
+}
+
+// wavHeader16kMono builds the canonical 44-byte header for 16 kHz mono 16-bit PCM.
+func wavHeader16kMono(dataLen uint32) [wavHeaderLen]byte {
 	var h [wavHeaderLen]byte
 	copy(h[0:], "RIFF")
 	binary.LittleEndian.PutUint32(h[4:], 36+dataLen)
 	copy(h[8:], "WAVE")
 	copy(h[12:], "fmt ")
-	binary.LittleEndian.PutUint32(h[16:], 16) // PCM fmt chunk size
-	binary.LittleEndian.PutUint16(h[20:], 1)  // audio format = PCM
-	binary.LittleEndian.PutUint16(h[22:], 1)  // channels = mono
-	binary.LittleEndian.PutUint32(h[24:], recSampleRate)
+	binary.LittleEndian.PutUint32(h[16:], 16)              // PCM fmt chunk size
+	binary.LittleEndian.PutUint16(h[20:], wavFormatPCM)    // audio format = PCM
+	binary.LittleEndian.PutUint16(h[22:], 1)               // channels = mono
+	binary.LittleEndian.PutUint32(h[24:], recSampleRate)   // sample rate
 	binary.LittleEndian.PutUint32(h[28:], recSampleRate*2) // byte rate = rate*blockAlign
 	binary.LittleEndian.PutUint16(h[32:], 2)               // block align = channels*bytesPerSample
 	binary.LittleEndian.PutUint16(h[34:], 16)              // bits per sample
 	copy(h[36:], "data")
 	binary.LittleEndian.PutUint32(h[40:], dataLen)
-	if _, err := f.Write(h[:]); err != nil {
-		return err
-	}
-	return nil
+	return h
 }

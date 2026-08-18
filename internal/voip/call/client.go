@@ -188,6 +188,15 @@ func (c *Client) EnableVideo(ctx context.Context, callID string) error {
 	return &CallError{"no call with id " + callID}
 }
 
+// DisableVideo stops sending the local camera stream mid-call and signals the peer,
+// so its UI drops our tile instead of freezing on the last frame.
+func (c *Client) DisableVideo(ctx context.Context, callID string) error {
+	if cm, ok := c.get(callID); ok {
+		return cm.DisableLocalVideo(ctx)
+	}
+	return &CallError{"no call with id " + callID}
+}
+
 func (c *Client) HoldCall(ctx context.Context, callID string, holdMusic []float32) error {
 	if cm, ok := c.get(callID); ok {
 		return cm.Hold(holdMusic)

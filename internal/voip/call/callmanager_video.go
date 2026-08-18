@@ -111,6 +111,9 @@ func (m *CallManager) sendVideoFrame(annexb []byte, ts90 uint32) error {
 	}
 	m.mu.Lock()
 	m.firstVideoSent = true
+	m.videoRtpPacketsSent += uint32(len(payloads))
+	m.videoRtpOctetsSent += uint32(len(annexb))
+	m.lastVideoRtpTs = ts90
 	m.mu.Unlock()
 	return nil
 }
@@ -177,6 +180,41 @@ func (m *CallManager) EnableLocalVideo(ctx context.Context) error {
 	return nil
 }
 
+// DisableLocalVideo turns the local camera off mid-call and tells the peer with a
+// <video state=6> (stopped), so the peer's UI drops our tile instead of freezing on
+// the last frame it decoded. Only the *sending* direction stops: the peer may still
+// be sending video, so the relay subscription and the derived SSRCs stay in place and
+// a later EnableLocalVideo can resume without renegotiating them. A no-op if there is
+// no active call.
+func (m *CallManager) DisableLocalVideo(ctx context.Context) error {
+	m.mu.Lock()
+	call := m.currentCall
+	if call == nil || call.IsEnded() {
+		m.mu.Unlock()
+		return &CallError{"no active call to disable video on"}
+	}
+	m.videoEnabled = false
+	callID := call.CallID
+	dest := call.PeerJid
+	if m.acceptedByJid != "" {
+		dest = m.acceptedByJid
+	}
+	stanza := signaling.BuildVideoStateStanza(signaling.VideoStateParams{
+		PeerJid:     wanode.MustJID(dest),
+		CallID:      callID,
+		CallCreator: wanode.MustJID(call.CallCreator),
+		State:       signaling.VideoStateStopped,
+	})
+	m.mu.Unlock()
+
+	if err := m.sock.SendNode(ctx, stanza); err != nil {
+		m.log.Error("send video stop", "call_id", callID, "err", err)
+		return err
+	}
+	m.log.Info("local video disabled", "call_id", callID)
+	return nil
+}
+
 // HandleVideoState processes an inbound mid-call <video state=N> stanza. WhatsApp
 // surfaces these via UnknownCallEvent (they are not a first-class whatsmeow
 // event). Every video stanza MUST be answered with a typed ACK (class="call"
@@ -207,9 +245,9 @@ func (m *CallManager) HandleVideoState(ctx context.Context, node *waBinary.Node)
 		fireState = -1
 	)
 	switch parsed.State {
-	case signaling.VideoStateEnabled, 2, signaling.VideoStateUpgradeRequest, signaling.VideoStateUpgradeReqV2:
-		// Peer turned its camera on or sent state=1/2/3. Make sure the relay forwards its video
-		// stream, then accept the upgrade so the peer keeps sending.
+	case 2, signaling.VideoStateUpgradeRequest, signaling.VideoStateUpgradeReqV2:
+		// Peer sent an upgrade request (state=2/3/11). Make sure the relay forwards its video
+		// stream, then send VideoStateUpgradeAccept (state=4).
 		if m.videoPeerSsrc == 0 || m.videoSelfSsrc == 0 {
 			m.deriveVideoSsrcsLocked(callID, m.ownDeviceJid, m.peerDeviceJid)
 		}
@@ -220,6 +258,15 @@ func (m *CallManager) HandleVideoState(ctx context.Context, node *waBinary.Node)
 			State: signaling.VideoStateUpgradeAccept,
 		})
 		reply = &accept
+		fireState = signaling.VideoStateEnabled
+	case signaling.VideoStateEnabled:
+		// Peer announced video enabled (state=1). Ensure SSRCs and stream subsciptions are active,
+		// but do NOT send a state=4 stanza back (only the typed ACK sent above).
+		if m.videoPeerSsrc == 0 || m.videoSelfSsrc == 0 {
+			m.deriveVideoSsrcsLocked(callID, m.ownDeviceJid, m.peerDeviceJid)
+		}
+		m.applyStreamSsrcsLocked()
+		call.MediaType = core.CallMediaTypeVideo
 		fireState = signaling.VideoStateEnabled
 	case signaling.VideoStateUpgradeAccept:
 		// Our upgrade request was accepted; frames are already gated on the relay

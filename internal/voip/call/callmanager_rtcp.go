@@ -71,6 +71,10 @@ func (m *CallManager) emitRtcp208() {
 	}
 	pkt := media.BuildCompact208(m.selfSsrc, m.lastRtpTs)
 	m.protectAndBroadcastLocked(pkt[:])
+	if m.videoSelfSsrc != 0 {
+		pktV := media.BuildCompact208(m.videoSelfSsrc, m.lastVideoRtpTs)
+		m.protectAndBroadcastLocked(pktV[:])
+	}
 }
 
 func (m *CallManager) emitRtcp209() {
@@ -81,6 +85,10 @@ func (m *CallManager) emitRtcp209() {
 	}
 	pkt := media.BuildCompact209(m.selfSsrc)
 	m.protectAndBroadcastLocked(pkt[:])
+	if m.videoSelfSsrc != 0 {
+		pktV := media.BuildCompact209(m.videoSelfSsrc)
+		m.protectAndBroadcastLocked(pktV[:])
+	}
 }
 
 func (m *CallManager) emitRtcpSR() {
@@ -102,6 +110,21 @@ func (m *CallManager) emitRtcpSR() {
 	}
 	pkt := media.BuildRTCPCompound(m.selfSsrc, stats, rb, m.rtcpCName, now)
 	m.protectAndBroadcastLocked(pkt)
+
+	if m.videoSelfSsrc != 0 {
+		vStats := media.RTCPSenderStats{
+			PacketsSent:  m.videoRtpPacketsSent,
+			OctetsSent:   m.videoRtpOctetsSent,
+			RtpTimestamp: m.lastVideoRtpTs,
+		}
+		var vRb *media.RTCPReportBlock
+		if m.recvStats != nil && m.videoPeerSsrc != 0 {
+			b := m.recvStats.ReportBlock(m.videoPeerSsrc, now)
+			vRb = &b
+		}
+		vPkt := media.BuildRTCPCompound(m.videoSelfSsrc, vStats, vRb, m.rtcpCName, now)
+		m.protectAndBroadcastLocked(vPkt)
+	}
 }
 
 func (m *CallManager) protectAndBroadcastLocked(rtcp []byte) {
