@@ -24,6 +24,16 @@ const videoChannelLabel = "video"
 // uint32 timestamp + uint8 keyframe flag.
 const videoFrameHeaderLen = 5
 
+// browserLeg is the operator side of a call, as the call plumbing sees it: a sink
+// for peer media plus a teardown. Bridge implements it over WebRTC data channels;
+// WSBridge implements it over a plain WebSocket for operators who cannot reach the
+// server over UDP.
+type browserLeg interface {
+	WritePCM(pcm []float32) error
+	WriteVideo(annexb []byte, ts90 uint32, keyframe bool) error
+	Close()
+}
+
 // Bridge is the browser-leg adapter: it carries raw PCM (and, for video calls,
 // H.264 access units) between the browser and the CallManager over WebRTC data
 // channels. The call core only ever sees []float32 PCM and Annex-B bytes, so it

@@ -128,6 +128,88 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "429": { $ref: "#/components/responses/RateLimited" }
+  /api/sessions/{sid}/pair-code:
+    post:
+      operationId: pairSessionByPhoneCode
+      summary: Re-pair an account with an 8-digit code instead of a QR
+      description: >
+        Starts the "Link with phone number instead" flow: a fresh device is created,
+        connected, and WhatsApp is asked for a pairing code that the operator types
+        into the phone. Use this when the phone cannot scan the browser's screen.
+        The code is also pushed over SSE (session-auth-state, state="pair_code") and
+        appears in SessionInfo.code until the link succeeds or times out.
+      parameters:
+        - $ref: "#/components/parameters/Sid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone]
+              properties:
+                phone:
+                  type: string
+                  description: >
+                    The phone being linked, international format with the country
+                    code first. Non-digits are stripped; at least 8 digits required.
+                  example: "5511987654321"
+      responses:
+        "200":
+          description: Pairing code issued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code]
+                properties:
+                  code:
+                    type: string
+                    description: 8-digit code to enter on the phone
+                    example: "ABCD1234"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/sessions/{sid}/qr:
+    get:
+      operationId: getSessionQR
+      summary: Current pairing QR payload of the account
+      description: >
+        Returns the QR string last emitted for this session, or an empty string
+        once the account is paired. The same payload is pushed over SSE as
+        session-qr; poll this only when the stream is unavailable.
+      parameters:
+        - $ref: "#/components/parameters/Sid"
+      responses:
+        "200":
+          description: QR payload (empty when already paired)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [qr]
+                properties:
+                  qr:
+                    type: string
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/sessions/{sid}/status:
+    get:
+      operationId: getSessionStatus
+      summary: Connection state of one account
+      parameters:
+        - $ref: "#/components/parameters/Sid"
+      responses:
+        "200":
+          description: Session state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionInfo"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
   /api/sessions/{sid}/calls:
     post:
       operationId: startCall
@@ -257,6 +339,44 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/InternalError" }
+  /api/sessions/{sid}/calls/{id}/ws:
+    get:
+      operationId: attachCallWebSocket
+      summary: Attach the operator's audio to a call over a WebSocket (WebRTC fallback)
+      description: >
+        Upgrades to a WebSocket that carries the operator leg of the call, for
+        browsers that cannot reach the media port over UDP (a firewall dropping UDP,
+        or a reverse proxy with no UDP path). It replaces whatever transport was
+        attached to the call before, so it also works for picking up a transferred
+        call.
+
+
+        Wire format, both directions: one binary message per frame of raw Int16
+        little-endian PCM, 16 kHz mono — exactly what the WebRTC "pcm" data channel
+        carries. Text messages and frames larger than 16 KiB are ignored. The client
+        MUST request the "pcm16" subprotocol. Audio only: a video call still needs
+        the WebRTC transport. The server pings every 20 s to survive idle-connection
+        reapers; when the socket drops, the call ends.
+
+
+        Authentication is the same as every other /api route, but a cross-origin
+        handshake cannot carry the SameSite=Strict session cookie, so an operator on
+        another origin must pass ?apiKey= (or ?access_token=) on the query string.
+      parameters:
+        - $ref: "#/components/parameters/Sid"
+        - $ref: "#/components/parameters/CallId"
+      responses:
+        "101":
+          description: Switching protocols; the socket now carries PCM frames
+        "400":
+          description: Not a valid WebSocket upgrade, or the Origin is not allowed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
   /api/sessions/{sid}/calls/{id}/accept:
     post:
       operationId: acceptCall
@@ -308,17 +428,33 @@ paths:
   /api/sessions/{sid}/calls/{id}/video:
     post:
       operationId: enableVideo
-      summary: Enable the local camera mid-call (audio→video upgrade)
+      summary: Turn the local camera on or off mid-call
       description: >
-        Sends a WhatsApp mid-call video-upgrade request (<video state=3>) to the
-        peer and derives the video SSRCs so the relay forwards both video streams.
-        The browser starts capturing/encoding once this returns.
+        With no body (or any action other than "stop"), sends a WhatsApp mid-call
+        video-upgrade request (<video state=3>) to the peer and derives the video
+        SSRCs so the relay forwards both video streams; the browser starts
+        capturing/encoding once this returns. With {"action":"stop"}, signals
+        <video state=6> so the peer's UI drops our tile instead of freezing on the
+        last decoded frame — only the outbound direction stops, inbound video and the
+        relay subscription are left alone so a later enable needs no renegotiation.
       parameters:
         - $ref: "#/components/parameters/Sid"
         - $ref: "#/components/parameters/CallId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                action:
+                  type: string
+                  enum: [enable, stop]
+                  default: enable
+                  description: Anything other than "stop" requests the video upgrade
       responses:
         "200":
-          description: Video upgrade requested
+          description: Video state change signalled
           content:
             application/json:
               schema:
@@ -328,6 +464,278 @@ paths:
                   status:
                     type: string
                     const: ok
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /api/sessions/{sid}/calls/{id}/hold:
+    post:
+      operationId: holdCall
+      summary: Park the WhatsApp peer on hold music, or resume the call
+      description: >
+        On hold, the operator's microphone stops being relayed and hold music is
+        injected into the WhatsApp leg instead. The music is read per hold from
+        DataDir/hold-music.wav when present (uploaded via POST /api/holdmusic),
+        otherwise the built-in chime is used. Broadcasts call-hold-state over SSE
+        so every operator's UI shows the badge.
+      parameters:
+        - $ref: "#/components/parameters/Sid"
+        - $ref: "#/components/parameters/CallId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                action:
+                  type: string
+                  enum: [hold, resume]
+                  default: hold
+                  description: Anything other than "resume" holds the call
+      responses:
+        "200":
+          description: Hold state applied
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /api/sessions/{sid}/calls/{id}/transfer:
+    post:
+      operationId: transferCall
+      summary: Blind-transfer a live call to another operator
+      description: >
+        Transfers between operators on the SAME paired WhatsApp account: the
+        WhatsApp leg (CallManager) stays up, the call goes on hold so the peer
+        hears music, and a call-transfer SSE event prompts the target operator.
+        When that operator attaches its browser via POST .../webrtc, the new
+        bridge replaces the old one and the call resumes automatically.
+      parameters:
+        - $ref: "#/components/parameters/Sid"
+        - $ref: "#/components/parameters/CallId"
+        - $ref: "#/components/parameters/ClientId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to]
+              properties:
+                to:
+                  type: string
+                  description: Target operator identity (the X-Client-Id it connects with)
+      responses:
+        "200":
+          description: Transfer offered to the target operator
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /api/sessions/{sid}/calls/{id}/record:
+    post:
+      operationId: recordCall
+      summary: Start or stop server-side recording of a call
+      description: >
+        Mixes both legs (peer audio and operator microphone) into a single mono
+        16 kHz 16-bit PCM WAV at RecordingsDir/<callID>.wav. Starting twice is a
+        no-op; the recording is closed automatically when the call ends.
+        Broadcasts call-record-state over SSE.
+      parameters:
+        - $ref: "#/components/parameters/Sid"
+        - $ref: "#/components/parameters/CallId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                action:
+                  type: string
+                  enum: [start, stop]
+                  default: start
+                  description: Anything other than "stop" starts recording
+      responses:
+        "200":
+          description: Recording state applied
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /api/holdmusic:
+    get:
+      operationId: getHoldMusic
+      summary: Status of the hold-music file
+      description: >
+        Reports whether an admin-uploaded WAV is present in DataDir. When absent,
+        exists is false and name describes the built-in chime.
+      responses:
+        "200":
+          description: Hold-music status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [exists, name, size]
+                properties:
+                  exists:
+                    type: boolean
+                  name:
+                    type: string
+                  size:
+                    type: integer
+                    description: Size in bytes, 0 when using the built-in chime
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    post:
+      operationId: uploadHoldMusic
+      summary: Replace the hold-music file
+      description: >
+        Uploads the WAV played to the peer while a call is on hold. The upload must
+        be a 16-bit PCM RIFF/WAVE file (mono or stereo, 8-48 kHz); anything else is
+        rejected so a bad upload cannot silently fall back to the built-in chime.
+        The server downmixes and resamples it to 16 kHz mono — the rate the
+        WhatsApp leg runs at — and writes the normalised result atomically to
+        DataDir/hold-music.wav. Unlike the rest of /api/*, this route allows bodies
+        above the 1 MiB cap (limit is 8 MiB).
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: 16-bit PCM WAV, mono or stereo, 8-48 kHz
+      responses:
+        "200":
+          description: Hold music replaced
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, size]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+                  size:
+                    type: integer
+                    description: Size in bytes of the stored 16 kHz mono file
+                  source_rate:
+                    type: integer
+                    description: Sample rate of the uploaded file, before conversion
+                  source_chans:
+                    type: integer
+                    description: Channel count of the uploaded file, before downmixing
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "413":
+          description: Upload exceeds the 8 MiB limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /api/recordings:
+    get:
+      operationId: listRecordings
+      summary: List call recordings on disk
+      description: >
+        Lists the WAVs in RecordingsDir, newest first. Recordings are keyed by call
+        ID across every session, since that is how they are stored. A recording whose
+        call is still in progress is flagged active: its WAV header still carries the
+        placeholder zero length, so it will not play until the call ends.
+      responses:
+        "200":
+          description: Recordings on disk
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [recordings]
+                properties:
+                  recordings:
+                    type: array
+                    items:
+                      type: object
+                      required: [callId, size, modifiedAt, active]
+                      properties:
+                        callId:
+                          type: string
+                        size:
+                          type: integer
+                          description: Size in bytes
+                        modifiedAt:
+                          type: integer
+                          format: int64
+                          description: Last write time in milliseconds since the epoch
+                        active:
+                          type: boolean
+                          description: Still being recorded, so not yet playable
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /api/recordings/{id}:
+    get:
+      operationId: downloadRecording
+      summary: Download one call recording
+      description: >
+        Streams the 16 kHz mono WAV for a call, with Range support so a player can
+        seek. When the call is still live the response carries X-Recording-Active:
+        true and the audio will read as empty, because the length field in the WAV
+        header is only patched when recording stops.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+          description: Call ID, as returned by /api/recordings
+      responses:
+        "200":
+          description: The recording
+          headers:
+            X-Recording-Active:
+              description: Present and true while the call is still being recorded
+              schema: { type: string }
+          content:
+            audio/wav:
+              schema:
+                type: string
+                format: binary
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "429": { $ref: "#/components/responses/RateLimited" }
@@ -381,6 +789,241 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/InternalError" }
+  /api/sessions/{sid}/calls/group:
+    post:
+      operationId: startGroupCall
+      summary: Start a group call by ringing the first participant
+      description: >
+        Places the outgoing WhatsApp call to phones[0] and records the full
+        participant list on the call, then broadcasts group-call over SSE so the
+        panel can drive the roster. WhatsApp itself is rung once; the remaining
+        numbers are tracked by the panel and added via .../participants.
+      parameters:
+        - $ref: "#/components/parameters/Sid"
+        - $ref: "#/components/parameters/ClientId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phones]
+              properties:
+                phones:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: string
+                  description: Participants; non-digits are stripped, phones[0] is rung
+                is_video:
+                  type: boolean
+                  default: false
+                group_jid:
+                  type: string
+                  description: Optional group JID, surfaced as the call's peer name
+      responses:
+        "200": { $ref: "#/components/responses/CallRef" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /api/sessions/{sid}/calls/{id}/control:
+    post:
+      operationId: callControl
+      summary: Relay a conference control action to the other operators
+      description: >
+        Fans the action out as a call-control SSE event. The server does not
+        interpret it; the panel decides what each action means (mute, raise hand,
+        reaction, and so on).
+      parameters:
+        - $ref: "#/components/parameters/Sid"
+        - $ref: "#/components/parameters/CallId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action:
+                  type: string
+                participant:
+                  type: string
+                emoji:
+                  type: string
+                extra:
+                  type: object
+                  additionalProperties: true
+      responses:
+        "200":
+          description: Action broadcast
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/sessions/{sid}/calls/{id}/lobby:
+    post:
+      operationId: callLobby
+      summary: Admit or reject a participant waiting in the lobby
+      description: Broadcasts a call-lobby SSE event; the panel owns the lobby state.
+      parameters:
+        - $ref: "#/components/parameters/Sid"
+        - $ref: "#/components/parameters/CallId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [participant, action]
+              properties:
+                participant:
+                  type: string
+                action:
+                  type: string
+                  enum: [admit, reject]
+      responses:
+        "200":
+          description: Lobby decision broadcast
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/sessions/{sid}/calls/{id}/participants:
+    post:
+      operationId: callParticipants
+      summary: Add, remove or re-ring conference participants
+      description: Broadcasts a call-participants SSE event; the panel owns the roster.
+      parameters:
+        - $ref: "#/components/parameters/Sid"
+        - $ref: "#/components/parameters/CallId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action:
+                  type: string
+                  enum: [add, remove, rering]
+                phone:
+                  type: string
+                  description: Single target; non-digits are stripped
+                phones:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "200":
+          description: Roster change broadcast
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/sessions/{sid}/call-links:
+    post:
+      operationId: createCallLink
+      summary: Mint a shareable call-room token
+      parameters:
+        - $ref: "#/components/parameters/Sid"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                  default: Reunião DUO CRM
+                scheduled_at:
+                  type: integer
+                  description: Unix milliseconds; 0 when not scheduled
+                is_video:
+                  type: boolean
+                  default: false
+      responses:
+        "200":
+          description: Call link created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, url, title]
+                properties:
+                  token:
+                    type: string
+                  url:
+                    type: string
+                  title:
+                    type: string
+                  scheduled_at:
+                    type: integer
+                  is_video:
+                    type: boolean
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/sessions/{sid}/call-links/{token}:
+    get:
+      operationId: getCallLink
+      summary: Resolve a call-room token
+      parameters:
+        - $ref: "#/components/parameters/Sid"
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Call link metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, valid, title]
+                properties:
+                  token:
+                    type: string
+                  valid:
+                    type: boolean
+                  title:
+                    type: string
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
   /api/sessions/{sid}/contacts:
     get:
       operationId: listContacts
@@ -730,6 +1373,14 @@ components:
           type: string
         paired:
           type: boolean
+        qr:
+          type: string
+          description: Pairing QR payload; empty once paired
+        code:
+          type: string
+          description: >
+            8-digit pairing code, present only while a POST /pair-code flow is in
+            flight. Mutually exclusive with qr.
     CallStatus:
       type: string
       enum: [starting, ringing, connected, reconnecting, ended]
@@ -848,6 +1499,9 @@ components:
           type: string
         qr:
           type: string
+        code:
+          type: string
+          description: 8-digit pairing code when state is "pair_code"
     CallStatusEvent:
       type: object
       required: [type, sessionId, id, owner, status, peer, startedAt]

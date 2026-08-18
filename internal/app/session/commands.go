@@ -12,6 +12,7 @@ import (
 	"wacalls/internal/voip/call"
 	"wacalls/internal/voip/core"
 
+	"github.com/coder/websocket"
 	"go.mau.fi/whatsmeow/types"
 )
 
@@ -111,6 +112,13 @@ func (s *Session) EnableVideo(ctx context.Context, callID string) error {
 	return s.calls.EnableVideo(ctx, callID)
 }
 
+// DisableVideo stops the outbound camera stream and tells the peer, so the peer's UI
+// drops our tile instead of freezing on the last frame it decoded. Inbound video is
+// untouched — the peer may still be sending.
+func (s *Session) DisableVideo(ctx context.Context, callID string) error {
+	return s.calls.DisableVideo(ctx, callID)
+}
+
 func (s *Session) HoldCall(ctx context.Context, callID string) error {
 	diskPath := filepath.Join(s.mgr.DataDir, "hold-music.wav")
 	music := assets.LoadHoldMusic(diskPath)
@@ -158,4 +166,29 @@ func (s *Session) AttachBrowser(callID, offerSDP string) (string, error) {
 	_ = cm.Resume()
 	s.mgr.broker.EmitHoldState(s.id, callID, false)
 	return answer, nil
+}
+
+// AttachBrowserWS makes an already-upgraded WebSocket the operator leg of a call,
+// replacing whatever transport was attached before (so an operator can be handed a
+// transferred call the same way as over WebRTC). It blocks until the socket closes:
+// the caller is the HTTP handler that accepted the upgrade, and returning from that
+// handler would tear the hijacked connection down.
+func (s *Session) AttachBrowserWS(callID string, conn *websocket.Conn) error {
+	cm, ok := s.calls.Get(callID)
+	if !ok {
+		return fmt.Errorf("no such call %s", callID)
+	}
+	bridge := NewWSBridge(conn, s.log)
+	bridge.OnBrowserPCM = func(pcm []float32) {
+		cm.FeedCapturedPCM(pcm)
+		if rec := s.getRecorder(callID); rec != nil {
+			rec.WriteOperator(pcm)
+		}
+	}
+	bridge.OnTerminal = func() { go s.terminateCall(callID, core.EndCallReasonUserEnded) }
+	s.setBridge(callID, bridge)
+	_ = cm.Resume()
+	s.mgr.broker.EmitHoldState(s.id, callID, false)
+	bridge.ReadLoop()
+	return nil
 }

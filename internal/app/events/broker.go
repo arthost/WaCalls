@@ -19,6 +19,9 @@ type AuthSnapshot struct {
 	State  string `json:"state"`
 	Paired bool   `json:"paired"`
 	QR     string `json:"qr,omitempty"`
+	// Code is the 8-digit pairing code, set only while a link-by-phone-number flow is
+	// in flight. It is an alternative to QR, never shown alongside one.
+	Code string `json:"code,omitempty"`
 }
 
 type SessionInfo struct {
@@ -28,6 +31,7 @@ type SessionInfo struct {
 	State  string `json:"state"`
 	Paired bool   `json:"paired"`
 	QR     string `json:"qr,omitempty"`
+	Code   string `json:"code,omitempty"`
 }
 
 type subscriber struct {

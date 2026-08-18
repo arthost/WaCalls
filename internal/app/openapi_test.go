@@ -28,11 +28,15 @@ func TestOpenAPISpecMatchesRoutes(t *testing.T) {
 			}
 		}
 	}
+	// Routes registered directly on the mux instead of through apiRoutes: the auth
+	// probe and login sit outside withAuth, and the hold-music upload is mounted
+	// separately so it escapes the 1 MiB maxBytes cap that wraps the /api/ tree.
 	served := map[string]bool{
 		"GET /healthz":          true,
 		"GET /api/openapi.yaml": true,
 		"GET /api/auth/status":  true,
 		"POST /api/login":       true,
+		"POST /api/holdmusic":   true,
 	}
 	for _, rt := range apiRoutes {
 		served[rt.method+" /api"+rt.path] = true

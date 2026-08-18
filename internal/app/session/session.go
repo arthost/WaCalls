@@ -2,9 +2,11 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,7 +40,7 @@ type Session struct {
 	calls  *call.Client
 
 	bridgeMu sync.Mutex
-	bridges  map[string]*Bridge
+	bridges  map[string]browserLeg
 
 	recMu     sync.Mutex
 	recorders map[string]*media.WavRecorder
@@ -55,7 +57,7 @@ func newSession(mgr *Manager, id, name string, client *whatsmeow.Client) *Sessio
 		log:       mgr.log.With("session", id),
 		client:    client,
 		auth:      events.AuthSnapshot{State: "connecting"},
-		bridges:   map[string]*Bridge{},
+		bridges:   map[string]browserLeg{},
 		recorders: map[string]*media.WavRecorder{},
 	}
 	s.calls = call.NewClient(wa.NewSocket(client), s.log, s.makeExtensions, mgr.maxCalls, s.wireCall, mgr.newObserver)
@@ -208,6 +210,12 @@ func (s *Session) startPairing(ctx context.Context) error {
 		for evt := range qrChan {
 			switch evt.Event {
 			case "code":
+				// The operator may have switched to a pairing code after this channel
+				// was opened. Publishing the QR then would replace the code in the UI
+				// with a screen they already declined.
+				if s.pairingByCode() {
+					continue
+				}
 				s.log.Info("scan the QR code to pair this session")
 				qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
 				s.setAuth(events.AuthSnapshot{State: "qr", QR: evt.Code})
@@ -223,6 +231,44 @@ func (s *Session) startPairing(ctx context.Context) error {
 		}
 	}()
 	return nil
+}
+
+// startPhonePairing links this session with an 8-digit pairing code instead of a QR
+// code — the "Link with phone number instead" flow on the phone. whatsmeow only accepts
+// PairPhone on a connected, unpaired client, so the QR channel is opened and the socket
+// connected first; the QR events that result are suppressed while the code is in flight.
+// phone must be digits only in international format (country code first).
+func (s *Session) startPhonePairing(ctx context.Context, phone string) (string, error) {
+	if s.client.Store.ID != nil {
+		return "", fmt.Errorf("session already paired")
+	}
+	if !s.client.IsConnected() {
+		if err := s.startPairing(ctx); err != nil {
+			return "", err
+		}
+		deadline := time.Now().Add(8 * time.Second)
+		for !s.client.IsConnected() && time.Now().Before(deadline) {
+			time.Sleep(100 * time.Millisecond)
+		}
+		if !s.client.IsConnected() {
+			return "", fmt.Errorf("websocket not connected; cannot request pairing code")
+		}
+	}
+	code, err := s.client.PairPhone(ctx, phone, true, whatsmeow.PairClientChrome, "DuoCRM Calls")
+	if err != nil {
+		return "", err
+	}
+	s.setAuth(events.AuthSnapshot{State: "pair_code", Code: code})
+	s.log.Info("pairing code issued", "session", s.id)
+	return code, nil
+}
+
+// pairingByCode reports whether a phone-code link is in flight, which makes the QR
+// events from the same connection stale.
+func (s *Session) pairingByCode() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.auth.Code != ""
 }
 
 func (s *Session) setAuth(a events.AuthSnapshot) {
@@ -241,16 +287,16 @@ func (s *Session) Info() events.SessionInfo {
 	if id := s.client.Store.ID; id != nil {
 		jid = id.String()
 	}
-	return events.SessionInfo{ID: s.id, Name: s.name, JID: jid, State: a.State, Paired: a.Paired || jid != "", QR: a.QR}
+	return events.SessionInfo{ID: s.id, Name: s.name, JID: jid, State: a.State, Paired: a.Paired || jid != "", QR: a.QR, Code: a.Code}
 }
 
-func (s *Session) getBridge(callID string) *Bridge {
+func (s *Session) getBridge(callID string) browserLeg {
 	s.bridgeMu.Lock()
 	defer s.bridgeMu.Unlock()
 	return s.bridges[callID]
 }
 
-func (s *Session) setBridge(callID string, b *Bridge) {
+func (s *Session) setBridge(callID string, b browserLeg) {
 	s.bridgeMu.Lock()
 	old := s.bridges[callID]
 	if _, live := s.calls.Get(callID); !live {
@@ -283,11 +329,17 @@ func (s *Session) StartRecording(callID string) error {
 	if s.recorders[callID] != nil {
 		return nil
 	}
+	// Inbound call IDs arrive in the peer's offer stanza, so they are attacker-chosen
+	// text; interpolating one straight into a path would let it escape RecordingsDir.
+	name := recordingFileName(callID)
+	if name == "" {
+		return fmt.Errorf("call id %q is not usable as a file name", callID)
+	}
 	dir := s.mgr.RecordingsDir
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	path := filepath.Join(dir, callID+".wav")
+	path := filepath.Join(dir, name)
 	rec, err := media.NewWavRecorder(path)
 	if err != nil {
 		return err
@@ -295,6 +347,22 @@ func (s *Session) StartRecording(callID string) error {
 	s.recorders[callID] = rec
 	s.mgr.broker.EmitRecordState(s.id, callID, true)
 	return nil
+}
+
+// recordingFileName maps a call ID to a safe "<id>.wav" leaf, keeping only the
+// characters WhatsApp actually uses in call IDs. Returns "" when nothing is left.
+func recordingFileName(callID string) string {
+	var b strings.Builder
+	for _, r := range callID {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return b.String() + ".wav"
 }
 
 func (s *Session) StopRecording(callID string) error {
@@ -326,7 +394,7 @@ func (s *Session) teardownAllCalls() {
 	}
 	s.bridgeMu.Lock()
 	bridges := s.bridges
-	s.bridges = map[string]*Bridge{}
+	s.bridges = map[string]browserLeg{}
 	s.bridgeMu.Unlock()
 	for _, b := range bridges {
 		if b != nil {

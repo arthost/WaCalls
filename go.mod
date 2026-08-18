@@ -3,6 +3,7 @@ module wacalls
 go 1.25.0
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/pion/ice/v4 v4.2.7
@@ -30,7 +31,6 @@ require (
 	github.com/beeper/argo-go v1.1.2 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/coder/websocket v1.8.15 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/elliotchance/orderedmap/v3 v3.1.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect

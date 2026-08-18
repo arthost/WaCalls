@@ -254,6 +254,28 @@ func (m *Manager) Pair(id string) error {
 	return nil
 }
 
+// PairPhone links a session with an 8-digit pairing code instead of a QR code. It always
+// starts from a fresh device: a pairing code is bound to the socket that requested it, so
+// handing out a code for a client that is already mid-QR-flow (or mid-retry) would leave
+// the operator typing a code the server is no longer listening for.
+func (m *Manager) PairPhone(id, phone string) (string, error) {
+	s, ok := m.Get(id)
+	if !ok {
+		return "", fmt.Errorf("no session %s", id)
+	}
+	if s.client.Store.ID != nil {
+		return "", fmt.Errorf("session already paired")
+	}
+	s.replaceClient(whatsmeow.NewClient(m.container.NewDevice(), m.waLogger))
+	code, err := s.startPhonePairing(m.appCtx, phone)
+	if err != nil {
+		return "", fmt.Errorf("start phone pairing: %w", err)
+	}
+	m.broker.EmitSessionList(m.Infos())
+	m.log.Info("session re-pairing by phone code", "session", id)
+	return code, nil
+}
+
 func (m *Manager) DisconnectAll() {
 	m.mu.RLock()
 	all := make([]*Session, 0, len(m.sessions))
