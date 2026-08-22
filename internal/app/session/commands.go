@@ -17,6 +17,7 @@ import (
 )
 
 var ErrTooManyCalls = errors.New("max concurrent calls")
+var ErrWebSocketDisconnected = errors.New("whatsapp websocket disconnected")
 
 type StartedCall struct{ CallID, Peer, PeerName, PeerPhotoURL string }
 
@@ -34,20 +35,20 @@ func (s *Session) StartCall(ctx context.Context, phone string, video bool) (Star
 		return StartedCall{}, ErrTooManyCalls
 	}
 
+	reconnect := func() error {
+		s.client.Disconnect()
+		if err := s.client.Connect(); err != nil {
+			return fmt.Errorf("%w: reconnect failed: %v", ErrWebSocketDisconnected, err)
+		}
+		if err := waitConnected(ctx, s.client.IsConnected); err != nil {
+			return fmt.Errorf("%w: %v", ErrWebSocketDisconnected, err)
+		}
+		return nil
+	}
 	ensureConnected := func() error {
 		if !s.client.IsConnected() {
 			s.log.Warn("WhatsApp WebSocket disconnected — attempting reconnect", "session", s.id)
-			s.client.Disconnect()
-			if err := s.client.Connect(); err != nil {
-				return fmt.Errorf("websocket reconnect failed: %w", err)
-			}
-			deadline := time.Now().Add(6 * time.Second)
-			for !s.client.IsConnected() && time.Now().Before(deadline) {
-				time.Sleep(200 * time.Millisecond)
-			}
-			if !s.client.IsConnected() {
-				return fmt.Errorf("websocket not connected after reconnect attempt")
-			}
+			return reconnect()
 		}
 		return nil
 	}
@@ -58,13 +59,10 @@ func (s *Session) StartCall(ctx context.Context, phone string, video bool) (Star
 
 	peer := types.NewJID(phone, types.DefaultUserServer)
 	callID, err := s.calls.StartCall(ctx, peer, video)
-	if err != nil && strings.Contains(err.Error(), "websocket not connected") {
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "websocket not connected") {
 		s.log.Warn("Call offer failed with websocket disconnected — forcing reconnect & retry", "session", s.id)
-		s.client.Disconnect()
-		_ = s.client.Connect()
-		deadline := time.Now().Add(6 * time.Second)
-		for !s.client.IsConnected() && time.Now().Before(deadline) {
-			time.Sleep(200 * time.Millisecond)
+		if reconnectErr := reconnect(); reconnectErr != nil {
+			return StartedCall{}, reconnectErr
 		}
 		callID, err = s.calls.StartCall(ctx, peer, video)
 	}
@@ -78,6 +76,28 @@ func (s *Session) StartCall(ctx context.Context, phone string, video bool) (Star
 		PeerName:     resolvePeerName(ctx, s.client, peer),
 		PeerPhotoURL: cachedPhotoURL(ctx, s.mgr.photos, s.id, peer.String()),
 	}, nil
+}
+
+func waitConnected(ctx context.Context, connected func() bool) error {
+	if connected() {
+		return nil
+	}
+	timer := time.NewTimer(15 * time.Second)
+	defer timer.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return errors.New("websocket not connected after reconnect attempt")
+		case <-ticker.C:
+			if connected() {
+				return nil
+			}
+		}
+	}
 }
 
 func (s *Session) FetchCallPhoto(callID, peer string) {
