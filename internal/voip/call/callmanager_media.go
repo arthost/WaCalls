@@ -59,6 +59,11 @@ func (m *CallManager) ensureExtensionsAttachedLocked(ourDeviceJid, peerDeviceJid
 		Observer:        m.observer,
 	}
 	m.currentScope = scope
+	if m.holdActive {
+		scope.FrameOverride = func(out []float32) bool {
+			return m.fillHoldMusic(out)
+		}
+	}
 	for _, e := range m.extensions {
 		if err := e.Attach(scope); err != nil {
 			m.log.Error("extension attach failed", "ext", e.Name(), "err", err)

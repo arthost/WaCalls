@@ -165,6 +165,11 @@ func (c *CallInfo) ApplyTransition(t Transition) error {
 		s.EndReason = t.Reason
 
 	case TransitionMediaConnected:
+		if s.State == core.CallStateOnHold {
+			s.ConnectedAt = &now
+			s.VideoOff = true
+			return nil
+		}
 		if s.State != core.CallStateConnecting {
 			return &InvalidTransition{string(s.State), t.Type}
 		}
@@ -173,7 +178,7 @@ func (c *CallInfo) ApplyTransition(t Transition) error {
 		s.VideoOff = true
 
 	case TransitionMediaLost:
-		if s.State != core.CallStateActive {
+		if s.State != core.CallStateActive && s.State != core.CallStateOnHold {
 			return &InvalidTransition{string(s.State), t.Type}
 		}
 		s.State = core.CallStateReconnecting
@@ -198,7 +203,7 @@ func (c *CallInfo) ApplyTransition(t Transition) error {
 		s.EndReason = t.Reason
 
 	case TransitionHold:
-		if s.State != core.CallStateActive {
+		if s.State != core.CallStateActive && s.State != core.CallStateConnecting {
 			return &InvalidTransition{string(s.State), t.Type}
 		}
 		s.State = core.CallStateOnHold
