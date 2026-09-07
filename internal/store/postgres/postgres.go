@@ -26,7 +26,7 @@ type Bundle struct {
 }
 
 var migrations = [][]string{
-	{`CREATE TABLE IF NOT EXISTS sessions (
+	{`CREATE TABLE IF NOT EXISTS calls_sessions (
 		id   TEXT PRIMARY KEY,
 		name TEXT NOT NULL,
 		jid  TEXT,
@@ -63,6 +63,18 @@ var migrations = [][]string{
 		created_at BIGINT NOT NULL
 	)`,
 		`CREATE INDEX IF NOT EXISTS idx_auth_session_expires ON auth_session (expires_at)`},
+	{`DO $$ 
+	BEGIN 
+		IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'sessions' AND column_name = 'seq') THEN 
+			ALTER TABLE public.sessions RENAME TO calls_sessions; 
+		END IF; 
+	END $$;`,
+		`CREATE TABLE IF NOT EXISTS calls_sessions (
+		id   TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		jid  TEXT,
+		seq  BIGSERIAL
+	)`},
 }
 
 func Open(ctx context.Context, databaseURL string) (*Bundle, error) {
@@ -94,7 +106,7 @@ func (b *Bundle) Close() error { return b.db.Close() }
 type sessionStore struct{ db *sql.DB }
 
 func (s *sessionStore) List(ctx context.Context) ([]core.Session, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, COALESCE(jid, '') FROM sessions ORDER BY seq`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, COALESCE(jid, '') FROM calls_sessions ORDER BY seq`)
 	if err != nil {
 		return nil, err
 	}
@@ -111,17 +123,17 @@ func (s *sessionStore) List(ctx context.Context) ([]core.Session, error) {
 }
 
 func (s *sessionStore) Insert(ctx context.Context, id, name string) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO sessions (id, name, jid) VALUES ($1, $2, NULL)`, id, name)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO calls_sessions (id, name, jid) VALUES ($1, $2, NULL)`, id, name)
 	return err
 }
 
 func (s *sessionStore) SetJID(ctx context.Context, id, jid string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE sessions SET jid = $1 WHERE id = $2`, jid, id)
+	_, err := s.db.ExecContext(ctx, `UPDATE calls_sessions SET jid = $1 WHERE id = $2`, jid, id)
 	return err
 }
 
 func (s *sessionStore) Delete(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE id = $1`, id)
+	_, err := s.db.ExecContext(ctx, `DELETE FROM calls_sessions WHERE id = $1`, id)
 	return err
 }
 
