@@ -243,7 +243,8 @@ func (m *Manager) Pair(id string) error {
 		return fmt.Errorf("no session %s", id)
 	}
 	if s.client.Store.ID != nil {
-		return fmt.Errorf("session already paired")
+		_ = s.client.Logout(m.appCtx)
+		_ = s.client.Store.Delete(m.appCtx)
 	}
 	s.replaceClient(whatsmeow.NewClient(m.container.NewDevice(), m.waLogger))
 	if err := s.startPairing(m.appCtx); err != nil {
@@ -264,7 +265,8 @@ func (m *Manager) PairPhone(id, phone string) (string, error) {
 		return "", fmt.Errorf("no session %s", id)
 	}
 	if s.client.Store.ID != nil {
-		return "", fmt.Errorf("session already paired")
+		_ = s.client.Logout(m.appCtx)
+		_ = s.client.Store.Delete(m.appCtx)
 	}
 	s.replaceClient(whatsmeow.NewClient(m.container.NewDevice(), m.waLogger))
 	code, err := s.startPhonePairing(m.appCtx, phone)
