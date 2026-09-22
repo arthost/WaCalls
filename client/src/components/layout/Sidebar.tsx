@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { Loader2, Plus, Trash2 } from "lucide-react";
+import { Activity, Loader2, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { SystemMetricsModal } from "@/components/domain/system/SystemMetricsModal";
 import { setActiveSession, useSessions } from "@/stores/sessions";
 import { createSession, deleteSession } from "@/services/sessions";
 import { useT } from "@/hooks/useT";
@@ -22,6 +23,7 @@ export const Sidebar = ({ onNavigate }: { onNavigate?: () => void }) => {
   const activeId = useSessions((s) => s.activeId);
   const [creating, setCreating] = useState(false);
   const [toDelete, setToDelete] = useState<SessionInfo | null>(null);
+  const [showMetricsDialog, setShowMetricsDialog] = useState(false);
   const t = useT();
 
   const onNew = async () => {
@@ -47,9 +49,19 @@ export const Sidebar = ({ onNavigate }: { onNavigate?: () => void }) => {
 
   return (
     <div className="flex h-full flex-col gap-2 p-3">
-      <p className="px-2 pt-1 font-mono text-xs font-medium uppercase tracking-wide text-muted-foreground">
-        {t.sessions.accounts}
-      </p>
+      <div className="flex items-center justify-between px-2 pt-1">
+        <p className="font-mono text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          {t.sessions.accounts}
+        </p>
+        <button
+          onClick={() => setShowMetricsDialog(true)}
+          className="text-muted-foreground hover:text-emerald-500 transition-colors p-1"
+          title="Recursos do Servidor (VPS)"
+          aria-label="Recursos do Servidor (VPS)"
+        >
+          <Activity className="h-4 w-4" />
+        </button>
+      </div>
       <div className="flex-1 space-y-1 overflow-y-auto">
         {sessions.map((s) => (
           <div
@@ -125,6 +137,11 @@ export const Sidebar = ({ onNavigate }: { onNavigate?: () => void }) => {
         onConfirm={() => {
           if (toDelete) void remove(toDelete.id);
         }}
+      />
+
+      <SystemMetricsModal
+        open={showMetricsDialog}
+        onOpenChange={setShowMetricsDialog}
       />
     </div>
   );
