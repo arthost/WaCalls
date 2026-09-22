@@ -49,6 +49,25 @@ func (s *ctxQuerySock) Query(ctx context.Context, node waBinary.Node) (*waBinary
 	return nil, nil
 }
 
+func (s *ctxQuerySock) SendNode(ctx context.Context, node waBinary.Node) error {
+	tag := ""
+	if children := wanode.NodeChildren(&node); len(children) > 0 {
+		tag = children[0].Tag
+	}
+	if tag != "reject" && tag != "terminate" {
+		return nil
+	}
+	to := ""
+	if j, ok := node.Attrs["to"].(types.JID); ok {
+		to = j.String()
+	}
+	s.mu.Lock()
+	s.queries = append(s.queries, queriedStanza{tag: tag, to: to, ctxErr: ctx.Err()})
+	s.mu.Unlock()
+	s.done <- struct{}{}
+	return nil
+}
+
 func (s *ctxQuerySock) queried() []queriedStanza {
 	s.mu.Lock()
 	defer s.mu.Unlock()

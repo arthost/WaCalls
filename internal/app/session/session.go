@@ -162,6 +162,15 @@ func (s *Session) handleEvent(rawEvt any) {
 			_ = s.mgr.store.SetJID(s.mgr.appCtx, s.id, id.String())
 		}
 		s.setAuth(events.AuthSnapshot{State: "open", Paired: true})
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := s.client.SendPresence(ctx, types.PresenceAvailable); err != nil {
+				s.log.Warn("failed to send initial presence on connect", "err", err)
+			} else {
+				s.log.Debug("initial presence available sent on connect")
+			}
+		}()
 	case *waevents.Disconnected:
 		// O whatsmeow tentará reconectar automaticamente. Apenas logamos.
 		s.log.Warn("WhatsApp WebSocket disconnected — auto-reconnect pending", "session", s.id)
@@ -413,6 +422,25 @@ func (s *Session) replaceClient(client *whatsmeow.Client) {
 func (s *Session) shutdown() {
 	s.teardownAllCalls()
 	s.client.Disconnect()
+}
+
+func (s *Session) SendPresence(ctx context.Context, state types.Presence) error {
+	s.mu.Lock()
+	client := s.client
+	s.mu.Unlock()
+	if client == nil || !client.IsConnected() {
+		return fmt.Errorf("session not connected")
+	}
+	return client.SendPresence(ctx, state)
+}
+
+func (s *Session) OwnPhone() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.client == nil || s.client.Store == nil || s.client.Store.ID == nil {
+		return ""
+	}
+	return s.client.Store.ID.User
 }
 
 func endResult(c *call.CallInfo) string {

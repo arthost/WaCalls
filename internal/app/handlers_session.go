@@ -2,8 +2,12 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"strings"
+
+	"go.mau.fi/whatsmeow/types"
 )
 
 func (s *Server) handleSessionList(w http.ResponseWriter, r *http.Request) {
@@ -96,3 +100,46 @@ func (s *Server) handleSessionStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, sess.Info())
 }
+
+func (s *Server) handleSessionPresence(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionByID(w, r.PathValue("sid"))
+	if sess == nil {
+		return
+	}
+
+	var req struct {
+		State string `json:"state"`
+	}
+	if r.Body != nil {
+		err := json.NewDecoder(r.Body).Decode(&req)
+		if err != nil && !errors.Is(err, io.EOF) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json body"})
+			return
+		}
+	}
+
+	presence := types.PresenceAvailable
+	if req.State != "" {
+		switch strings.ToLower(strings.TrimSpace(req.State)) {
+		case "available", "online":
+			presence = types.PresenceAvailable
+		case "unavailable", "offline":
+			presence = types.PresenceUnavailable
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid presence state: must be 'available' or 'unavailable'"})
+			return
+		}
+	}
+
+	if err := sess.SendPresence(r.Context(), presence); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":   "ok",
+		"session":  sess.ID(),
+		"presence": string(presence),
+	})
+}
+

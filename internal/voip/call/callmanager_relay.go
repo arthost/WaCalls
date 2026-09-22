@@ -238,6 +238,11 @@ func (m *CallManager) cleanupMedia() {
 	m.outgoingPreacceptSent = false
 	m.actualPeerSet = false
 	m.extAttached = false
+	m.rxLockedSsrc = 0
+	m.rxLockedLastNs = 0
+	m.rxDedup = nil
+	m.rxDedupIdx = 0
+	m.rxDedupFilled = false
 	m.lastMediaRecv.Store(0)
 	if m.watchdogStop != nil {
 		close(m.watchdogStop)

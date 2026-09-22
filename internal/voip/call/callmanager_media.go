@@ -13,6 +13,10 @@ import (
 
 const rtpSessionBytes = 8 * 1024
 
+// rxFailoverSilence: how long the locked peer SSRC may be fully silent before a
+// different arriving SSRC is allowed to take over — but only if it decodes.
+const rxFailoverSilence = 2 * time.Second
+
 func (m *CallManager) replaceRtpSession(s *media.RtpSession) {
 	if m.rtpSession != nil {
 		m.observer.ReleaseMem(rtpSessionBytes)
@@ -200,6 +204,53 @@ func (m *CallManager) onRelayData(data []byte) {
 		m.mu.Unlock()
 		return
 	}
+
+	nowNs := time.Now().UnixNano()
+
+	// (C1) Forward exactly one peer stream. rxLockedSsrc is committed (in C2,
+	// after successful Unprotect) to the first SSRC that decodes. A different SSRC is
+	// dropped here — before spending an unprotect — UNLESS the locked stream has
+	// been fully silent past rxFailoverSilence; then this packet is let through
+	// as a failover candidate and only takes over the lock if it actually
+	// decrypts.
+	failoverTry := false
+	if m.rxLockedSsrc != 0 && ssrc != m.rxLockedSsrc {
+		if nowNs-m.rxLockedLastNs > int64(rxFailoverSilence) {
+			failoverTry = true
+		} else {
+			m.mu.Unlock()
+			return
+		}
+	}
+	if ssrc == m.rxLockedSsrc {
+		m.rxLockedLastNs = nowNs
+	}
+
+	// (B) Drop exact relay copies. Several relays forward the same stream, so the
+	// same (ssrc, seq) arrives 2-3x. Sliding window keyed by ssrc<<16|seq.
+	seq := uint16(data[2])<<8 | uint16(data[3])
+	dkey := uint64(ssrc)<<16 | uint64(seq)
+	if m.rxDedup == nil {
+		m.rxDedup = make(map[uint64]struct{}, len(m.rxDedupRing))
+	}
+	if _, dup := m.rxDedup[dkey]; dup {
+		obs := m.observer
+		m.mu.Unlock()
+		obs.SrtpRecvDrop("replay")
+		m.srtpDrops.add("replay")
+		return
+	}
+	if m.rxDedupFilled {
+		delete(m.rxDedup, m.rxDedupRing[m.rxDedupIdx])
+	}
+	m.rxDedupRing[m.rxDedupIdx] = dkey
+	m.rxDedup[dkey] = struct{}{}
+	m.rxDedupIdx++
+	if m.rxDedupIdx == len(m.rxDedupRing) {
+		m.rxDedupIdx = 0
+		m.rxDedupFilled = true
+	}
+
 	m.notePeerMediaLocked()
 	if pt == core.PayloadTypeWhatsAppOpus && !m.actualPeerSet {
 		m.actualPeerSet = true
@@ -239,6 +290,23 @@ func (m *CallManager) onRelayData(data []byte) {
 	if len(pkt.Payload) == 0 {
 		return
 	}
+
+	// (C2) Commit the lock only now that the packet successfully unprotects:
+	if m.rxLockedSsrc == 0 || failoverTry {
+		m.mu.Lock()
+		if m.rxLockedSsrc == 0 {
+			m.rxLockedSsrc = ssrc
+			m.rxLockedLastNs = nowNs
+			m.log.Debug("rx peer ssrc locked", "ssrc", ssrc)
+		} else if failoverTry && ssrc != m.rxLockedSsrc &&
+			nowNs-m.rxLockedLastNs > int64(rxFailoverSilence) {
+			m.log.Debug("rx peer ssrc re-lock (previous went silent)", "from", m.rxLockedSsrc, "to", ssrc)
+			m.rxLockedSsrc = ssrc
+			m.rxLockedLastNs = nowNs
+		}
+		m.mu.Unlock()
+	}
+
 	if recvStats != nil {
 		recvStats.NoteRTP(pkt.Header.SequenceNumber, pkt.Header.Timestamp, uint64(time.Now().UnixMilli()))
 	}

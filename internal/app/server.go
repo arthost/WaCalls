@@ -38,6 +38,7 @@ func newHTTPServer(addr string, h http.Handler) *http.Server {
 }
 
 type Server struct {
+	startTime      time.Time
 	broker         *events.Broker
 	sessions       *session.Manager
 	log            *slog.Logger
@@ -127,6 +128,7 @@ func NewServer(ctx context.Context, cfg config.Config, obsFactory func(string) c
 	}
 
 	srv := &Server{
+		startTime:      time.Now(),
 		broker:         broker,
 		sessions:       mgr,
 		log:            log,

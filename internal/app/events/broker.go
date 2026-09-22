@@ -275,3 +275,10 @@ func writeSSE(w http.ResponseWriter, f http.Flusher, ev any) {
 	_, _ = w.Write(append(append([]byte("data: "), data...), '\n', '\n'))
 	f.Flush()
 }
+
+func (b *Broker) ActiveCallCount() int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return len(b.calls)
+}
+

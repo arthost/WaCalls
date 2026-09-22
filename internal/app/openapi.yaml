@@ -170,6 +170,50 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "429": { $ref: "#/components/responses/RateLimited" }
+  /api/sessions/{sid}/presence:
+    post:
+      operationId: setSessionPresence
+      summary: Send presence ping or update status for an account
+      description: >
+        Sends an explicit presence update to WhatsApp for this session. Defaults to
+        "available" if no body or state is specified. Used for anti-inactivity
+        keepalive and external presence synchronization.
+      parameters:
+        - $ref: "#/components/parameters/Sid"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                state:
+                  type: string
+                  description: Presence state ('available' or 'unavailable')
+                  default: "available"
+                  example: "available"
+      responses:
+        "200":
+          description: Presence update sent
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, session, presence]
+                properties:
+                  status:
+                    type: string
+                    example: "ok"
+                  session:
+                    type: string
+                  presence:
+                    type: string
+                    example: "available"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502": { $ref: "#/components/responses/InternalError" }
   /api/sessions/{sid}/qr:
     get:
       operationId: getSessionQR
@@ -1225,6 +1269,31 @@ paths:
                   - $ref: "#/components/schemas/CallQualityEvent"
                   - $ref: "#/components/schemas/CallMarkEvent"
                   - $ref: "#/components/schemas/PingEvent"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/system/metrics:
+    get:
+      operationId: getSystemMetrics
+      summary: Real-time VPS and host telemetry metrics
+      description: >
+        Returns system resource telemetry including CPU, RAM, disk, load averages,
+        active calls, and WhatsApp session connections.
+      responses:
+        "200":
+          description: System telemetry metrics snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [process, host, timestamp]
+                properties:
+                  timestamp:
+                    type: integer
+                    format: int64
+                  process:
+                    type: object
+                  host:
+                    type: object
         "401": { $ref: "#/components/responses/Unauthorized" }
         "429": { $ref: "#/components/responses/RateLimited" }
 webhooks:

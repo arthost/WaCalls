@@ -21,6 +21,7 @@ var apiRoutes = []struct {
 	{"POST", "/sessions/{sid}/logout", (*Server).handleSessionLogout},
 	{"POST", "/sessions/{sid}/pair", (*Server).handleSessionPair},
 	{"POST", "/sessions/{sid}/pair-code", (*Server).handleSessionPairCode},
+	{"POST", "/sessions/{sid}/presence", (*Server).handleSessionPresence},
 	{"GET", "/sessions/{sid}/qr", (*Server).handleSessionQR},
 	{"GET", "/sessions/{sid}/status", (*Server).handleSessionStatus},
 	{"POST", "/sessions/{sid}/calls", (*Server).handleStartCall},
@@ -52,6 +53,7 @@ var apiRoutes = []struct {
 	{"POST", "/logout", (*Server).handleLogout},
 	{"POST", "/auth/password", (*Server).handlePassword},
 	{"GET", "/events", (*Server).handleEvents},
+	{"GET", "/system/metrics", (*Server).handleSystemMetrics},
 }
 
 func (s *Server) routes() http.Handler {

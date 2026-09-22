@@ -50,6 +50,19 @@ type CallManager struct {
 	peerSsrcs     []uint32
 	actualPeerSet bool
 
+	// Inbound audio hardening (see onRelayData):
+	//  - rxLockedSsrc: the peer stream we forward. Locked to the first SSRC that
+	//    decodes; a different SSRC is dropped before decode, unless the locked
+	//    one has gone fully silent for rxLockedSilence (failover, not a per-frame
+	//    "which is louder" switch — that flapped).
+	//  - rxDedup*: sliding window of (ssrc<<16|seq) to drop exact relay copies.
+	rxLockedSsrc   uint32
+	rxLockedLastNs int64
+	rxDedup        map[uint64]struct{}
+	rxDedupRing    [512]uint64
+	rxDedupIdx     int
+	rxDedupFilled  bool
+
 	firstPacketSent       bool
 	initialTransportSent  bool
 	outgoingPreacceptSent bool
@@ -284,9 +297,19 @@ func (m *CallManager) RejectCall(ctx context.Context, callID string, reason core
 
 func (m *CallManager) sendSignaling(ctx context.Context, node waBinary.Node) {
 	go func() {
+		// Attempt 1: non-blocking SendNode detached from caller context
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), signalingSendTimeout)
-		defer cancel()
-		_, _ = m.sock.Query(sctx, node)
+		err := m.sock.SendNode(sctx, node)
+		cancel()
+		if err != nil {
+			m.log.Warn("failed to send signaling stanza (attempt 1/2)", "err", err)
+			time.Sleep(500 * time.Millisecond)
+			sctx2, cancel2 := context.WithTimeout(context.WithoutCancel(ctx), signalingSendTimeout)
+			if err2 := m.sock.SendNode(sctx2, node); err2 != nil {
+				m.log.Error("failed to send signaling stanza (attempt 2/2)", "err", err2)
+			}
+			cancel2()
+		}
 	}()
 }
 

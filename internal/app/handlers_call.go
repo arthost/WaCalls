@@ -305,6 +305,10 @@ func (s *Server) doStartCall(sess *session.Session, w http.ResponseWriter, r *ht
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid phone"})
 		return
 	}
+	if own := sess.OwnPhone(); own != "" && isSamePhoneNumber(own, phone) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "você não pode ligar para si mesmo"})
+		return
+	}
 	owner := clientID(r)
 	if other := s.broker.OwnerActiveCall(owner); other != "" {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "operator already on a call"})
@@ -568,3 +572,30 @@ func normalizePhone(p string) string {
 	}
 	return b.String()
 }
+
+func isSamePhoneNumber(a, b string) bool {
+	aDigits := normalizePhone(a)
+	bDigits := normalizePhone(b)
+	if aDigits == "" || bDigits == "" {
+		return false
+	}
+	if aDigits == bDigits {
+		return true
+	}
+	// Se ambos forem números do Brasil (DDI 55)
+	if strings.HasPrefix(aDigits, "55") && strings.HasPrefix(bDigits, "55") {
+		// Pode ter 12 (55 + DDD de 2 dígitos + 8 dígitos) ou 13 dígitos (55 + DDD + 9 dígitos)
+		if (len(aDigits) == 12 || len(aDigits) == 13) && (len(bDigits) == 12 || len(bDigits) == 13) {
+			dddA := aDigits[2:4]
+			dddB := bDigits[2:4]
+			if dddA == dddB {
+				// Compara os 8 dígitos finais
+				last8A := aDigits[len(aDigits)-8:]
+				last8B := bDigits[len(bDigits)-8:]
+				return last8A == last8B
+			}
+		}
+	}
+	return false
+}
+
