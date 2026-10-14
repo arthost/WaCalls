@@ -289,7 +289,9 @@ func (s *Server) handleRecordingDownload(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) doStartCall(sess *session.Session, w http.ResponseWriter, r *http.Request) {
 	if !sess.IsPaired() {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "not paired"})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "A linha de telefonia do WhatsApp não está conectada. Escaneie o QR Code ou conecte o WhatsApp nas configurações de VoIP antes de realizar chamadas.",
+		})
 		return
 	}
 	var body struct {
@@ -297,30 +299,37 @@ func (s *Server) doStartCall(sess *session.Session, w http.ResponseWriter, r *ht
 		IsVideo bool   `json:"is_video"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Phone) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "phone required"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Número de telefone obrigatório"})
 		return
 	}
 	phone := normalizePhone(body.Phone)
 	if phone == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid phone"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Número de telefone inválido"})
 		return
 	}
 	if own := sess.OwnPhone(); own != "" && isSamePhoneNumber(own, phone) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "você não pode ligar para si mesmo"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Você não pode ligar para si mesmo"})
 		return
 	}
 	owner := clientID(r)
 	if other := s.broker.OwnerActiveCall(owner); other != "" {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "operator already on a call"})
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "O operador já possui uma chamada em andamento"})
 		return
 	}
 	st, err := sess.StartCall(r.Context(), phone, body.IsVideo)
 	if errors.Is(err, session.ErrTooManyCalls) {
-		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "max concurrent calls"})
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "Limite de chamadas simultâneas atingido"})
 		return
 	}
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		errMsg := err.Error()
+		if strings.Contains(strings.ToLower(errMsg), "desconectada") || strings.Contains(strings.ToLower(errMsg), "não está conectada") || strings.Contains(strings.ToLower(errMsg), "websocket not connected") || strings.Contains(strings.ToLower(errMsg), "usync devices") {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"error": "A linha de telefonia do WhatsApp não está conectada no momento. Verifique a conexão nas configurações de VoIP.",
+			})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": errMsg})
 		return
 	}
 	s.broker.UpsertCall(events.CallRecord{

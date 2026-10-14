@@ -21,6 +21,8 @@ import (
 type AIVoiceConfig struct {
 	Enabled        bool   `json:"enabled"`
 	APIKey         string `json:"api_key"`
+	APIKeyID       string `json:"api_key_id"`
+	Provider       string `json:"provider"`
 	Model          string `json:"model"`
 	Voice          string `json:"voice"`
 	Prompt         string `json:"prompt"`
@@ -64,6 +66,7 @@ func (s *Server) aiConfigPath(sid string) string {
 func (s *Server) getAIConfig(sid string) AIVoiceConfig {
 	cfg := AIVoiceConfig{
 		Enabled:        false,
+		Provider:       "google",
 		Model:          "gemini-2.0-flash",
 		Voice:          "Puck",
 		Prompt:         "Você é um assistente virtual do DuoCRM. Atenda o cliente de forma amigável, clara e concisa em português.",
@@ -77,6 +80,36 @@ func (s *Server) getAIConfig(sid string) AIVoiceConfig {
 		_ = json.Unmarshal(data, &cfg)
 	}
 	return cfg
+}
+
+func (s *Server) resolveAIKey(cfg AIVoiceConfig) string {
+	if strings.TrimSpace(cfg.APIKey) != "" {
+		return strings.TrimSpace(cfg.APIKey)
+	}
+	crmURL := os.Getenv("CRM_INTERNAL_URL")
+	if crmURL == "" {
+		crmURL = "http://duocrm-crm:3000"
+	}
+	baseURL := strings.TrimSuffix(crmURL, "/api/v1/internal/calls/webhook")
+	baseURL = strings.TrimSuffix(baseURL, "/")
+
+	provider := cfg.Provider
+	if provider == "" {
+		provider = "google"
+	}
+	reqURL := fmt.Sprintf("%s/api/v1/internal/calls/resolve_ai_key?api_key_id=%s&provider=%s", baseURL, cfg.APIKeyID, provider)
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(reqURL)
+	if err == nil && resp.StatusCode == http.StatusOK {
+		defer resp.Body.Close()
+		var res struct {
+			Key string `json:"key"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&res); err == nil && strings.TrimSpace(res.Key) != "" {
+			return strings.TrimSpace(res.Key)
+		}
+	}
+	return ""
 }
 
 func (s *Server) saveAIConfig(sid string, cfg AIVoiceConfig) error {
@@ -140,6 +173,14 @@ func (s *Server) handleStartAICall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	apiKey := s.resolveAIKey(cfg)
+	if apiKey == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "Nenhuma credencial de IA configurada. Selecione uma chave em Configurações de IA.",
+		})
+		return
+	}
+
 	st, err := sess.StartCall(r.Context(), phone, false)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -164,7 +205,7 @@ func (s *Server) handleStartAICall(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Wait for call to connect in background and start Gemini Live
-	go s.attachGeminiOnConnect(sess, st.CallID, phone, cfg.APIKey, model, voice, prompt, initMsg, cfg.Record)
+	go s.attachGeminiOnConnect(sess, st.CallID, phone, apiKey, model, voice, prompt, initMsg, cfg.Record)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"callId": st.CallID,
@@ -355,7 +396,13 @@ func (s *Server) dialOneAICall(
 		model = req.Model
 	}
 
-	s.attachGeminiOnConnect(sess, st.CallID, phone, cfg.APIKey, model, voice, prompt, initMsg, req.Record || cfg.Record)
+	apiKey := s.resolveAIKey(cfg)
+	if apiKey == "" {
+		s.log.Warn("ai campaign skipped: no API key resolved", "phone", phone)
+		return
+	}
+
+	s.attachGeminiOnConnect(sess, st.CallID, phone, apiKey, model, voice, prompt, initMsg, req.Record || cfg.Record)
 }
 
 // NotifyCRMAICallEnded posts call completion details to DuoCRM Rails.
@@ -399,7 +446,13 @@ func (s *Server) NotifyCRMAICallEnded(phone, callID string, durationSec int, rec
 // handleIncomingCallAI is called whenever a new incoming call is offered to a session.
 func (s *Server) handleIncomingCallAI(sessionID, callID, peer string) {
 	cfg := s.getAIConfig(sessionID)
-	if !cfg.Enabled || !cfg.AutoAnswer || cfg.APIKey == "" {
+	if !cfg.Enabled || !cfg.AutoAnswer {
+		return
+	}
+
+	apiKey := s.resolveAIKey(cfg)
+	if apiKey == "" {
+		s.log.Warn("AI auto-answer skipped: no API key could be resolved", "session", sessionID)
 		return
 	}
 
@@ -422,7 +475,7 @@ func (s *Server) handleIncomingCallAI(sessionID, callID, peer string) {
 	}
 
 	// Attach Gemini once connected
-	s.attachGeminiOnConnect(sess, callID, peer, cfg.APIKey, cfg.Model, cfg.Voice, cfg.Prompt, cfg.InitialMessage, cfg.Record)
+	s.attachGeminiOnConnect(sess, callID, peer, apiKey, cfg.Model, cfg.Voice, cfg.Prompt, cfg.InitialMessage, cfg.Record)
 }
 
 // handleCallEndedAI cleans up any active Gemini Live session associated with the call.

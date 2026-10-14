@@ -23,7 +23,15 @@ type StartedCall struct{ CallID, Peer, PeerName, PeerPhotoURL string }
 
 func (s *Session) ID() string { return s.id }
 
-func (s *Session) IsPaired() bool { return s.client.Store.ID != nil }
+func (s *Session) IsPaired() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return (s.auth.Paired || s.auth.State == "open") && s.client.Store.ID != nil && !s.client.Store.ID.IsEmpty()
+}
+
+func (s *Session) IsConnected() bool {
+	return s.client != nil && s.client.IsConnected()
+}
 
 func (s *Session) HasCall(callID string) bool {
 	_, ok := s.calls.Get(callID)
@@ -33,6 +41,10 @@ func (s *Session) HasCall(callID string) bool {
 func (s *Session) StartCall(ctx context.Context, phone string, video bool) (StartedCall, error) {
 	if max := s.mgr.maxCalls; max > 0 && s.calls.Count() >= max {
 		return StartedCall{}, ErrTooManyCalls
+	}
+
+	if !s.IsPaired() {
+		return StartedCall{}, errors.New("a linha de telefonia do WhatsApp não está conectada. Escaneie o QR Code ou conecte o WhatsApp nas configurações de VoIP antes de realizar chamadas")
 	}
 
 	reconnect := func() error {
@@ -54,20 +66,23 @@ func (s *Session) StartCall(ctx context.Context, phone string, video bool) (Star
 	}
 
 	if err := ensureConnected(); err != nil {
-		return StartedCall{}, err
+		return StartedCall{}, fmt.Errorf("a linha do WhatsApp está desconectada no momento: %w", err)
 	}
 
 	peer := types.NewJID(phone, types.DefaultUserServer)
 	callID, err := s.calls.StartCall(ctx, peer, video)
-	if err != nil && strings.Contains(strings.ToLower(err.Error()), "websocket not connected") {
+	if err != nil && (strings.Contains(strings.ToLower(err.Error()), "websocket not connected") || strings.Contains(strings.ToLower(err.Error()), "usync devices")) {
 		s.log.Warn("Call offer failed with websocket disconnected — forcing reconnect & retry", "session", s.id)
 		if reconnectErr := reconnect(); reconnectErr != nil {
-			return StartedCall{}, reconnectErr
+			return StartedCall{}, errors.New("a linha do WhatsApp está desconectada. Verifique se o aparelho celular está com internet e reconecte")
 		}
 		callID, err = s.calls.StartCall(ctx, peer, video)
 	}
 
 	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "websocket not connected") || strings.Contains(strings.ToLower(err.Error()), "usync devices") {
+			return StartedCall{}, errors.New("a linha de telefonia do WhatsApp não está conectada. Conecte o WhatsApp nas configurações de VoIP")
+		}
 		return StartedCall{}, err
 	}
 	return StartedCall{
