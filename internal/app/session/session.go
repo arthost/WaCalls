@@ -218,6 +218,7 @@ func (s *Session) connect(ctx context.Context) error {
 }
 
 func (s *Session) startPairing(ctx context.Context) error {
+	s.setAuth(events.AuthSnapshot{State: "connecting"})
 	qrChan, err := s.client.GetQRChannel(ctx)
 	if err != nil {
 		return err
