@@ -50,6 +50,9 @@ type Broker struct {
 	log      *slog.Logger
 
 	SnapshotFn func() []any
+
+	OnIncomingCall func(sessionID, callID, peer string)
+	OnCallEnded    func(sessionID, callID, peer string)
 }
 
 func NewBroker(records core.CallRecordStore, log *slog.Logger) *Broker {
@@ -130,6 +133,9 @@ func (b *Broker) EmitIncoming(sessionID, id, peer, peerName, peerPhotoURL string
 		"peerName": peerName, "peerPhotoUrl": peerPhotoURL, "isVideo": isVideo,
 		"offeredAt": time.Now().UnixMilli(),
 	})
+	if b.OnIncomingCall != nil {
+		go b.OnIncomingCall(sessionID, id, peer)
+	}
 }
 
 func (b *Broker) EmitIncomingClaimed(sessionID, id, owner string) {

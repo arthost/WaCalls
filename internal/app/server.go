@@ -144,8 +144,15 @@ func NewServer(ctx context.Context, cfg config.Config, obsFactory func(string) c
 		apiToken:       cfg.APIToken,
 		loginLimiter:   newIPRateLimiterWithBurst(loginRateRPS, loginRateBurst),
 	}
-	go srv.loginLimiter.janitor(ctx)
 	srv.authorize = srv.authorizeRequest
+
+	broker.OnIncomingCall = func(sessionID, callID, peer string) {
+		srv.handleIncomingCallAI(sessionID, callID, peer)
+	}
+	broker.OnCallEnded = func(sessionID, callID, peer string) {
+		srv.handleCallEndedAI(sessionID, callID, peer)
+	}
+
 	return srv, nil
 }
 

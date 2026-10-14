@@ -108,6 +108,10 @@ func (s *Session) FetchCallPhoto(callID, peer string) {
 	go s.fetchPeerPhoto(jid, callID)
 }
 
+func (s *Session) GetCallManager(callID string) (*call.CallManager, bool) {
+	return s.calls.Get(callID)
+}
+
 func (s *Session) AcceptCall(ctx context.Context, callID string) error {
 	return s.calls.AcceptCall(ctx, callID)
 }
@@ -193,12 +197,12 @@ func (s *Session) AttachBrowser(callID, offerSDP string) (string, error) {
 // transferred call the same way as over WebRTC). It blocks until the socket closes:
 // the caller is the HTTP handler that accepted the upgrade, and returning from that
 // handler would tear the hijacked connection down.
-func (s *Session) AttachBrowserWS(callID string, conn *websocket.Conn) error {
+func (s *Session) AttachBrowserWS(callID string, conn *websocket.Conn, events bool) error {
 	cm, ok := s.calls.Get(callID)
 	if !ok {
 		return fmt.Errorf("no such call %s", callID)
 	}
-	bridge := NewWSBridge(conn, s.log)
+	bridge := NewWSBridge(conn, s.log, events)
 	bridge.OnBrowserPCM = func(pcm []float32) {
 		cm.FeedCapturedPCM(pcm)
 		if rec := s.getRecorder(callID); rec != nil {

@@ -49,10 +49,9 @@ func (s *Server) handleCallWS(w http.ResponseWriter, r *http.Request) {
 		s.log.Warn("call ws upgrade failed", "session", r.PathValue("sid"), "call", callID, "err", err)
 		return
 	}
-	conn.SetReadLimit(wsReadLimit)
-
-	s.log.Info("call ws attached", "session", r.PathValue("sid"), "call", callID)
-	if err := sess.AttachBrowserWS(callID, conn); err != nil {
+	events := r.URL.Query().Get("events") == "1" || r.URL.Query().Get("events") == "true"
+	s.log.Info("call ws attached", "session", r.PathValue("sid"), "call", callID, "events", events)
+	if err := sess.AttachBrowserWS(callID, conn, events); err != nil {
 		_ = conn.Close(websocket.StatusInternalError, "attach failed")
 		s.log.Warn("call ws attach failed", "call", callID, "err", err)
 		return

@@ -31,6 +31,7 @@ const videoFrameHeaderLen = 5
 type browserLeg interface {
 	WritePCM(pcm []float32) error
 	WriteVideo(annexb []byte, ts90 uint32, keyframe bool) error
+	SendEvent(ev map[string]any)
 	Close()
 }
 
@@ -136,6 +137,8 @@ func (b *Bridge) WriteVideo(annexb []byte, ts90 uint32, keyframe bool) error {
 	copy(msg[videoFrameHeaderLen:], annexb)
 	return dc.Send(msg)
 }
+
+func (b *Bridge) SendEvent(_ map[string]any) {}
 
 func (b *Bridge) Close() {
 	if b.pc != nil {

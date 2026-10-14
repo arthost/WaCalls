@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"sync"
 	"time"
@@ -39,6 +40,7 @@ type WSBridge struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	log    *slog.Logger
+	events bool
 
 	// writeMu serialises Write: coder/websocket allows only one writer in flight
 	// and errors out on concurrent use.
@@ -54,9 +56,27 @@ type WSBridge struct {
 	OnTerminal func()
 }
 
-func NewWSBridge(conn *websocket.Conn, log *slog.Logger) *WSBridge {
+func NewWSBridge(conn *websocket.Conn, log *slog.Logger, events bool) *WSBridge {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &WSBridge{conn: conn, ctx: ctx, cancel: cancel, log: log}
+	return &WSBridge{conn: conn, ctx: ctx, cancel: cancel, log: log, events: events}
+}
+
+// SendEvent transmits lifecycle events as JSON text frames when ?events=1 was requested.
+func (b *WSBridge) SendEvent(ev map[string]any) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed || !b.events {
+		return
+	}
+	data, err := json.Marshal(ev)
+	if err != nil {
+		return
+	}
+	b.writeMu.Lock()
+	defer b.writeMu.Unlock()
+	ctx, cancel := context.WithTimeout(b.ctx, wsWriteTimeout)
+	defer cancel()
+	_ = b.conn.Write(ctx, websocket.MessageText, data)
 }
 
 // WritePCM sends 16 kHz mono float32 PCM to the browser as Int16 LE.

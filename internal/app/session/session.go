@@ -96,6 +96,9 @@ func (s *Session) wireCall(callID string, cm *call.CallManager) {
 	}
 	cm.OnStateChange = func(c *call.CallInfo) {
 		if c.IsEnded() {
+			if b := s.getBridge(c.CallID); b != nil {
+				b.SendEvent(map[string]any{"type": "call-ended", "reason": string(c.StateData.EndReason), "callId": c.CallID})
+			}
 			s.mgr.tracer.EndCall(c.CallID, endResult(c), string(c.StateData.EndReason), endDuration(c))
 			s.removeCall(c.CallID)
 			s.mgr.broker.EndCall(c.CallID, string(c.StateData.EndReason))
@@ -109,12 +112,16 @@ func (s *Session) wireCall(callID string, cm *call.CallManager) {
 		if existing == nil {
 			s.mgr.tracer.StartCall(c.CallID, telemetry.CallAttrs{Session: s.id, Peer: c.PeerJid, Direction: dir})
 		}
-		if mapStatus(c.StateData.State) == events.StatusConnected && c.StateData.ConnectedAt != nil {
+		st := mapStatus(c.StateData.State)
+		if b := s.getBridge(c.CallID); b != nil {
+			b.SendEvent(map[string]any{"type": "call-status", "status": st, "callId": c.CallID})
+		}
+		if st == events.StatusConnected && c.StateData.ConnectedAt != nil {
 			s.mgr.tracer.MarkActive(c.CallID, c.StateData.ConnectedAt.Sub(c.CreatedAt))
 		}
 		rec := events.CallRecord{
 			SessionID: s.id, CallID: c.CallID, Direction: dir, Peer: c.PeerJid,
-			StartedAt: time.Now().UnixMilli(), Status: mapStatus(c.StateData.State),
+			StartedAt: time.Now().UnixMilli(), Status: st,
 		}
 		if existing != nil {
 			rec.Owner = existing.Owner
@@ -126,6 +133,9 @@ func (s *Session) wireCall(callID string, cm *call.CallManager) {
 		s.mgr.broker.UpsertCall(rec)
 	}
 	cm.OnEnded = func(c *call.CallInfo) {
+		if b := s.getBridge(c.CallID); b != nil {
+			b.SendEvent(map[string]any{"type": "call-ended", "reason": string(c.StateData.EndReason), "callId": c.CallID})
+		}
 		s.mgr.tracer.EndCall(c.CallID, endResult(c), string(c.StateData.EndReason), endDuration(c))
 		s.removeCall(c.CallID)
 		s.mgr.broker.EndCall(c.CallID, string(c.StateData.EndReason))
@@ -263,7 +273,8 @@ func (s *Session) startPhonePairing(ctx context.Context, phone string) (string, 
 			return "", fmt.Errorf("websocket not connected; cannot request pairing code")
 		}
 	}
-	code, err := s.client.PairPhone(ctx, phone, true, whatsmeow.PairClientChrome, "DuoCRM Calls")
+	// Display name must follow "Browser (OS)" format to prevent WhatsApp 400 bad-request
+	code, err := s.client.PairPhone(ctx, phone, true, whatsmeow.PairClientChrome, "Chrome (Linux)")
 	if err != nil {
 		return "", err
 	}

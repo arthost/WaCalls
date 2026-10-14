@@ -54,6 +54,10 @@ var apiRoutes = []struct {
 	{"POST", "/auth/password", (*Server).handlePassword},
 	{"GET", "/events", (*Server).handleEvents},
 	{"GET", "/system/metrics", (*Server).handleSystemMetrics},
+	{"GET", "/sessions/{sid}/ai-config", (*Server).handleGetAIConfig},
+	{"POST", "/sessions/{sid}/ai-config", (*Server).handleSaveAIConfig},
+	{"POST", "/sessions/{sid}/ai-call", (*Server).handleStartAICall},
+	{"POST", "/sessions/{sid}/ai-broadcast", (*Server).handleAIBroadcast},
 }
 
 func (s *Server) routes() http.Handler {

@@ -140,6 +140,10 @@ func (b *Broker) EndCall(id, reason string) {
 	})
 	b.broadcastCallList()
 	b.persist(ended)
+
+	if b.OnCallEnded != nil {
+		go b.OnCallEnded(sessionID, id, ended.Peer)
+	}
 }
 
 func (b *Broker) persist(rec CallRecord) {
