@@ -2,12 +2,15 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"wacalls/internal/app/events"
@@ -26,8 +29,15 @@ import (
 
 	"github.com/mdp/qrterminal/v3"
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/appstate"
+	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
 	waevents "go.mau.fi/whatsmeow/types/events"
+)
+
+const (
+	presencePulseDuration = 30 * time.Second
+	presencePulseMinGap   = 1 * time.Hour
 )
 
 type Session struct {
@@ -45,20 +55,28 @@ type Session struct {
 	recMu     sync.Mutex
 	recorders map[string]*media.WavRecorder
 
+	armMu           sync.Mutex
+	armedRecordings map[string]bool
+
+	lastPulse atomic.Int64
+	pulsing   atomic.Bool
+
 	mu   sync.Mutex
 	auth events.AuthSnapshot
 }
 
 func newSession(mgr *Manager, id, name string, client *whatsmeow.Client) *Session {
+	paired := client != nil && client.Store != nil && client.Store.ID != nil && !client.Store.ID.IsEmpty()
 	s := &Session{
-		id:        id,
-		name:      name,
-		mgr:       mgr,
-		log:       mgr.log.With("session", id),
-		client:    client,
-		auth:      events.AuthSnapshot{State: "connecting"},
-		bridges:   map[string]browserLeg{},
-		recorders: map[string]*media.WavRecorder{},
+		id:              id,
+		name:            name,
+		mgr:             mgr,
+		log:             mgr.log.With("session", id),
+		client:          client,
+		auth:            events.AuthSnapshot{State: "connecting", Paired: paired},
+		bridges:         map[string]browserLeg{},
+		recorders:       map[string]*media.WavRecorder{},
+		armedRecordings: map[string]bool{},
 	}
 	s.calls = call.NewClient(wa.NewSocket(client), s.log, s.makeExtensions, mgr.maxCalls, s.wireCall, mgr.newObserver)
 	client.AddEventHandler(s.handleEvent)
@@ -119,6 +137,9 @@ func (s *Session) wireCall(callID string, cm *call.CallManager) {
 		if st == events.StatusConnected && c.StateData.ConnectedAt != nil {
 			s.mgr.tracer.MarkActive(c.CallID, c.StateData.ConnectedAt.Sub(c.CreatedAt))
 		}
+		if c.StateData.State == core.CallStateActive {
+			s.startRecordingIfArmed(c.CallID)
+		}
 		rec := events.CallRecord{
 			SessionID: s.id, CallID: c.CallID, Direction: dir, Peer: c.PeerJid,
 			StartedAt: time.Now().UnixMilli(), Status: st,
@@ -133,6 +154,21 @@ func (s *Session) wireCall(callID string, cm *call.CallManager) {
 		s.mgr.broker.UpsertCall(rec)
 	}
 	cm.OnEnded = func(c *call.CallInfo) {
+		stats := cm.RxStats()
+		s.log.Info("call audio stats", "call_id", c.CallID, "packets", stats.Packets, "gaps", stats.SpeechGaps,
+			"max_gap", stats.MaxSpeechGap, "undecodable", stats.Undecodable, "relocks", stats.Relocks, "relay", stats.Relay)
+
+		s.armMu.Lock()
+		wasArmed := s.armedRecordings[c.CallID]
+		delete(s.armedRecordings, c.CallID)
+		s.armMu.Unlock()
+
+		if rec := s.getRecorder(c.CallID); rec != nil {
+			_ = s.StopRecording(c.CallID)
+		} else if wasArmed {
+			s.log.Info("call recording skipped: call was not answered", "call_id", c.CallID)
+		}
+
 		if b := s.getBridge(c.CallID); b != nil {
 			b.SendEvent(map[string]any{"type": "call-ended", "reason": string(c.StateData.EndReason), "callId": c.CallID})
 		}
@@ -141,6 +177,7 @@ func (s *Session) wireCall(callID string, cm *call.CallManager) {
 		s.mgr.broker.EndCall(c.CallID, string(c.StateData.EndReason))
 	}
 	cm.OnPeerAudio = func(pcm16 []float32) {
+		s.startRecordingIfArmed(callID)
 		if b := s.getBridge(callID); b != nil {
 			_ = b.WritePCM(pcm16)
 		}
@@ -165,22 +202,37 @@ func (s *Session) wireCall(callID string, cm *call.CallManager) {
 }
 
 func (s *Session) handleEvent(rawEvt any) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.log.Error("event handler panicked", "event", fmt.Sprintf("%T", rawEvt),
+				"panic", r, "stack", string(debug.Stack()))
+		}
+	}()
 	ctx := context.Background()
 	switch evt := rawEvt.(type) {
+	case *waevents.ClientOutdated:
+		s.log.Error("connect failure: client outdated (405); checking web.whatsapp.com",
+			"wa_version", store.GetWAVersion().String())
+		s.RetryAfterOutdated(store.GetWAVersion())
+	case *waevents.TemporaryBan:
+		s.log.Error("connect failure: temporary ban", "code", evt.Code, "expire", evt.Expire)
+	case *waevents.ConnectFailure:
+		s.log.Error("connect failure", "reason", int(evt.Reason), "message", evt.Message)
+	case *waevents.StreamReplaced:
+		s.log.Error("stream replaced: another server or client is connected with this account's keys")
+		s.setAuth(events.AuthSnapshot{State: "replaced", Paired: true})
 	case *waevents.Connected:
 		if id := s.client.Store.ID; id != nil {
 			_ = s.mgr.store.SetJID(s.mgr.appCtx, s.id, id.String())
 		}
 		s.setAuth(events.AuthSnapshot{State: "open", Paired: true})
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			if err := s.client.SendPresence(ctx, types.PresenceAvailable); err != nil {
-				s.log.Warn("failed to send initial presence on connect", "err", err)
-			} else {
-				s.log.Debug("initial presence available sent on connect")
-			}
-		}()
+		go s.refreshPresence(s.mgr.appCtx)
+	case *waevents.AppStateSyncComplete:
+		if evt.Name == appstate.WAPatchCriticalBlock {
+			go s.refreshPresence(s.mgr.appCtx)
+		}
+	case *waevents.PushNameSetting:
+		go s.refreshPresence(s.mgr.appCtx)
 	case *waevents.Disconnected:
 		// O whatsmeow tentará reconectar automaticamente. Apenas logamos.
 		s.log.Warn("WhatsApp WebSocket disconnected — auto-reconnect pending", "session", s.id)
@@ -188,7 +240,7 @@ func (s *Session) handleEvent(rawEvt any) {
 	case *waevents.LoggedOut:
 		s.setAuth(events.AuthSnapshot{State: "logged_out", Paired: false})
 	case *waevents.CallOffer:
-		s.calls.HandleOffer(ctx, wrapCall(evt.From, evt.Data), evt.From)
+		s.onIncomingOffer(ctx, evt)
 	case *waevents.CallAccept:
 		s.calls.HandleAccept(ctx, wrapCall(evt.From, evt.Data), evt.From)
 	case *waevents.CallTransport:
@@ -208,6 +260,40 @@ func (s *Session) handleEvent(rawEvt any) {
 			s.calls.HandleVideoState(ctx, evt.Node, from)
 		}
 	}
+}
+
+func (s *Session) onIncomingOffer(ctx context.Context, evt *waevents.CallOffer) {
+	node := wrapCall(evt.From, evt.Data)
+	info := signaling.ExtractNodeInfo(node)
+	if info == nil || info.CallID == "" {
+		return
+	}
+	callID := info.CallID
+
+	defer func() {
+		if r := recover(); r != nil {
+			s.log.Error("inbound offer handling panicked, dropping call", "call_id", callID,
+				"panic", r, "stack", string(debug.Stack()))
+			_ = s.calls.EndCall(ctx, callID, core.EndCallReasonFailed)
+			s.removeCall(callID)
+			s.mgr.broker.EndCall(callID, "error")
+		}
+	}()
+
+	// Chamada entre duas sessões deste servidor: quem ligou já é dono deste
+	// callID. Se esta sessão também registrasse a oferta, as duas disputariam o
+	// mesmo registro no broker (indexado só por callID) e o card sumiria do
+	// painel de quem ligou. Aqui a chamada toca só no celular.
+	if origin, found := s.mgr.FindSessionByCall(callID); found && origin.id != s.id {
+		if ac, ok := origin.Call(callID); ok {
+			if c := ac.CurrentCall(); c != nil && c.Direction == core.CallDirectionOutgoing {
+				s.log.Info("ignoring inbound offer for call placed by another session on same server", "call_id", callID, "origin_session", origin.id)
+				return
+			}
+		}
+	}
+
+	s.calls.HandleOffer(ctx, node, evt.From)
 }
 
 func (s *Session) connect(ctx context.Context) error {
@@ -344,14 +430,48 @@ func (s *Session) removeCall(callID string) {
 	s.calls.Remove(callID)
 }
 
+func (s *Session) Call(callID string) (*call.CallManager, bool) {
+	return s.calls.Get(callID)
+}
+
 func (s *Session) StartRecording(callID string) error {
+	cm, ok := s.calls.Get(callID)
+	if ok && cm.CurrentCall() != nil && cm.CurrentCall().StateData.State == core.CallStateActive {
+		return s.startRecordingWav(callID)
+	}
+	s.armMu.Lock()
+	if s.armedRecordings == nil {
+		s.armedRecordings = make(map[string]bool)
+	}
+	s.armedRecordings[callID] = true
+	s.armMu.Unlock()
+	s.log.Info("call recording armed; will begin when answered", "call_id", callID)
+	return nil
+}
+
+func (s *Session) startRecordingIfArmed(callID string) {
+	s.armMu.Lock()
+	armed := s.armedRecordings[callID]
+	s.armMu.Unlock()
+	if !armed {
+		return
+	}
+	if s.getRecorder(callID) != nil {
+		return
+	}
+	if err := s.startRecordingWav(callID); err != nil {
+		s.log.Error("failed to start armed recording", "call_id", callID, "err", err)
+	} else {
+		s.log.Info("armed recording started", "call_id", callID)
+	}
+}
+
+func (s *Session) startRecordingWav(callID string) error {
 	s.recMu.Lock()
 	defer s.recMu.Unlock()
 	if s.recorders[callID] != nil {
 		return nil
 	}
-	// Inbound call IDs arrive in the peer's offer stanza, so they are attacker-chosen
-	// text; interpolating one straight into a path would let it escape RecordingsDir.
 	name := recordingFileName(callID)
 	if name == "" {
 		return fmt.Errorf("call id %q is not usable as a file name", callID)
@@ -387,6 +507,10 @@ func recordingFileName(callID string) string {
 }
 
 func (s *Session) StopRecording(callID string) error {
+	s.armMu.Lock()
+	delete(s.armedRecordings, callID)
+	s.armMu.Unlock()
+
 	s.recMu.Lock()
 	rec := s.recorders[callID]
 	delete(s.recorders, callID)
@@ -397,6 +521,52 @@ func (s *Session) StopRecording(callID string) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Session) sendPresenceTimeout(ctx context.Context, state types.Presence) error {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return s.SendPresence(ctxTimeout, state)
+}
+
+func (s *Session) refreshPresence(ctx context.Context) {
+	if time.Since(time.Unix(0, s.lastPulse.Load())) >= presencePulseMinGap {
+		s.presencePulse(ctx)
+		return
+	}
+	if s.pulsing.Load() {
+		return
+	}
+	if err := s.sendPresenceTimeout(ctx, types.PresenceUnavailable); err != nil {
+		s.log.Warn("failed to send presence unavailable", "err", err)
+	}
+}
+
+func (s *Session) presencePulse(ctx context.Context) {
+	if !s.pulsing.CompareAndSwap(false, true) {
+		return
+	}
+	defer s.pulsing.Store(false)
+	if err := s.sendPresenceTimeout(ctx, types.PresenceAvailable); err != nil {
+		if errors.Is(err, whatsmeow.ErrNoPushName) {
+			s.log.Debug("presence pulse deferred until pushname arrives")
+		} else {
+			s.log.Warn("presence pulse failed", "err", err)
+		}
+		return
+	}
+	s.lastPulse.Store(time.Now().UnixNano())
+	s.log.Info("presence pulse sent (available 30s)")
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(presencePulseDuration):
+	}
+	if err := s.sendPresenceTimeout(ctx, types.PresenceUnavailable); err != nil {
+		s.log.Warn("presence pulse: failed to return to unavailable", "err", err)
+	} else {
+		s.log.Debug("presence pulse ended (returned to unavailable)")
+	}
 }
 
 func (s *Session) getRecorder(callID string) *media.WavRecorder {

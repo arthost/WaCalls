@@ -24,9 +24,10 @@ type StartedCall struct{ CallID, Peer, PeerName, PeerPhotoURL string }
 func (s *Session) ID() string { return s.id }
 
 func (s *Session) IsPaired() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return (s.auth.Paired || s.auth.State == "open") && s.client.Store.ID != nil && !s.client.Store.ID.IsEmpty()
+	if s.client == nil || s.client.Store == nil || s.client.Store.ID == nil {
+		return false
+	}
+	return !s.client.Store.ID.IsEmpty()
 }
 
 func (s *Session) IsConnected() bool {

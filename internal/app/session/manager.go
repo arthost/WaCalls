@@ -129,6 +129,18 @@ func (m *Manager) Get(id string) (*Session, bool) {
 	return s, ok
 }
 
+// FindSessionByCall looks up the session that currently owns callID across all sessions.
+func (m *Manager) FindSessionByCall(callID string) (*Session, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, s := range m.sessions {
+		if s.HasCall(callID) {
+			return s, true
+		}
+	}
+	return nil, false
+}
+
 func (m *Manager) Infos() []events.SessionInfo {
 	m.mu.RLock()
 	ordered := make([]*Session, 0, len(m.order))
@@ -186,7 +198,34 @@ func (m *Manager) Restore(ctx context.Context) error {
 	}
 	m.broker.EmitSessionList(m.Infos())
 	m.log.Info("sessions restored", "count", len(m.Infos()))
+	m.startPresenceWorker(ctx)
+	m.StartWAVersionWorker(ctx)
 	return nil
+}
+
+func (m *Manager) startPresenceWorker(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				m.mu.RLock()
+				sessions := make([]*Session, 0, len(m.sessions))
+				for _, s := range m.sessions {
+					sessions = append(sessions, s)
+				}
+				m.mu.RUnlock()
+				for _, s := range sessions {
+					if s.IsConnected() && s.IsPaired() {
+						go s.presencePulse(ctx)
+					}
+				}
+			}
+		}
+	}()
 }
 
 // Create creates a new WhatsApp session. If id is empty a random ID is generated.

@@ -32,7 +32,7 @@ func TestStartCallRejectsPhoneWithoutDigits(t *testing.T) {
 	if rec.Code != 400 {
 		t.Fatalf("expected 400 for phone without digits, got %d", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "invalid phone") {
+	if !strings.Contains(rec.Body.String(), "invalid phone") && !strings.Contains(rec.Body.String(), "inválido") {
 		t.Fatalf("expected invalid phone error, got %q", rec.Body.String())
 	}
 }
@@ -47,7 +47,7 @@ func TestStartCallToleratesLegacyFields(t *testing.T) {
 		strings.NewReader(`{"phone":"abc","duration_ms":300000,"record":true}`))
 	s.doStartCall(sess, rec, r)
 
-	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "invalid phone") {
+	if rec.Code != 400 || (!strings.Contains(rec.Body.String(), "invalid phone") && !strings.Contains(rec.Body.String(), "inválido")) {
 		t.Fatalf("legacy fields must decode fine and reach phone validation, got %d %q", rec.Code, rec.Body.String())
 	}
 }

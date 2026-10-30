@@ -158,6 +158,7 @@ func NewServer(ctx context.Context, cfg config.Config, obsFactory func(string) c
 
 func (s *Server) Run(ctx context.Context, addr string) error {
 	defer s.sessions.DisconnectAll()
+	session.RefreshWAVersion(ctx, s.log)
 	if err := s.sessions.Restore(ctx); err != nil {
 		return err
 	}

@@ -81,6 +81,7 @@ func (m *CallManager) ensureExtensionsAttachedLocked(ourDeviceJid, peerDeviceJid
 			if held {
 				return
 			}
+			m.rx.decoded(time.Now().UnixNano(), pcm, "default-relay")
 			if m.OnPeerAudio != nil {
 				m.OnPeerAudio(pcm)
 			}
@@ -274,6 +275,7 @@ func (m *CallManager) onRelayData(data []byte) {
 
 	pkt, err := srtp.Unprotect(data)
 	if err != nil {
+		m.rx.dropped()
 		reason := "other"
 		var se *media.SrtpError
 		if errors.As(err, &se) {
@@ -301,6 +303,7 @@ func (m *CallManager) onRelayData(data []byte) {
 		} else if failoverTry && ssrc != m.rxLockedSsrc &&
 			nowNs-m.rxLockedLastNs > int64(rxFailoverSilence) {
 			m.log.Debug("rx peer ssrc re-lock (previous went silent)", "from", m.rxLockedSsrc, "to", ssrc)
+			m.rx.relocked()
 			m.rxLockedSsrc = ssrc
 			m.rxLockedLastNs = nowNs
 		}

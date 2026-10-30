@@ -78,6 +78,8 @@ type CallManager struct {
 	lastRedialAt  time.Time
 	srtpDrops     srtpDropTally
 
+	rx rxStats
+
 	sendSrtcp           *media.SrtcpContext
 	recvSrtcp           *media.SrtcpContext
 	srtcpDrops          srtpDropTally
@@ -354,3 +356,14 @@ func (m *CallManager) ownCredJid() string {
 type CallError struct{ Msg string }
 
 func (e *CallError) Error() string { return e.Msg }
+
+// RxStats returns the accumulated audio reception telemetry for the call.
+func (m *CallManager) RxStats() RxStats {
+	return m.rx.snapshot()
+}
+
+func (m *CallManager) SetCurrentCallForTest(call *CallInfo) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.currentCall = call
+}

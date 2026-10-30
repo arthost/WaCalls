@@ -1144,6 +1144,133 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/sessions/{sid}/ai-config:
+    get:
+      operationId: getAIConfig
+      summary: Retrieve AI voice configuration for the session
+      parameters:
+        - $ref: "#/components/parameters/Sid"
+      responses:
+        "200":
+          description: Current AI voice configuration
+          content:
+            application/json:
+              schema:
+                type: object
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: saveAIConfig
+      summary: Save AI voice configuration for the session
+      parameters:
+        - $ref: "#/components/parameters/Sid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Updated AI voice configuration
+          content:
+            application/json:
+              schema:
+                type: object
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /api/sessions/{sid}/ai-call:
+    post:
+      operationId: startAICall
+      summary: Initiate an outbound call powered by AI voice agent
+      parameters:
+        - $ref: "#/components/parameters/Sid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone]
+              properties:
+                phone:
+                  type: string
+                prompt:
+                  type: string
+                initial_message:
+                  type: string
+                voice:
+                  type: string
+                model:
+                  type: string
+      responses:
+        "200":
+          description: AI Call initiated
+          content:
+            application/json:
+              schema:
+                type: object
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503":
+          description: Session not paired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/sessions/{sid}/ai-broadcast:
+    post:
+      operationId: startAIBroadcast
+      summary: Run an AI voice broadcast campaign across multiple numbers
+      parameters:
+        - $ref: "#/components/parameters/Sid"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [numbers]
+              properties:
+                numbers:
+                  type: array
+                  items:
+                    type: string
+                concurrency:
+                  type: integer
+                interval_sec:
+                  type: integer
+                prompt:
+                  type: string
+                initial_message:
+                  type: string
+                voice:
+                  type: string
+                model:
+                  type: string
+                record:
+                  type: boolean
+      responses:
+        "200":
+          description: Broadcast started or queued
+          content:
+            application/json:
+              schema:
+                type: object
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503":
+          description: Session not paired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/auth/status:
     get:
       operationId: authStatus

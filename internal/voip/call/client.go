@@ -60,6 +60,12 @@ func (c *Client) Remove(callID string) {
 	c.mu.Unlock()
 }
 
+func (c *Client) PutForTest(callID string, cm *CallManager) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls[callID] = cm
+}
+
 func (c *Client) Count() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
